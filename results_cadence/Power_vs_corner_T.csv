@@ -1,0 +1,4 @@
+Pavg (modelFiles=toplevel.scs:top_ff) X,Pavg (modelFiles=toplevel.scs:top_ff) Y,Pavg (modelFiles=toplevel.scs:top_fs) X,Pavg (modelFiles=toplevel.scs:top_fs) Y,Pavg (modelFiles=toplevel.scs:top_sf) X,Pavg (modelFiles=toplevel.scs:top_sf) Y,Pavg (modelFiles=toplevel.scs:top_ss) X,Pavg (modelFiles=toplevel.scs:top_ss) Y,Pavg (modelFiles=toplevel.scs:top_tt) X,Pavg (modelFiles=toplevel.scs:top_tt) Y
+-55,3.898991417801962e-05,-55,3.337338800866198e-05,-55,2.618827663587771e-05,-55,2.460846168806348e-05,-55,2.956236380260209e-05
+0,4.286748776404212e-05,0,3.519613056478886e-05,0,2.793696114192745e-05,0,2.589428071101102e-05,0,3.11572541195402e-05
+80,4.890081843562024e-05,80,3.827763782891023e-05,80,3.063491932609998e-05,80,2.758809343750069e-05,80,3.384211538208656e-05
