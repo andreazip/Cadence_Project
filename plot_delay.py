@@ -19,7 +19,7 @@ plt.rcParams.update({
 })
 
 class CadencePlotter:
-    def __init__(self, base_dir="results_cadence", plot_dir="plots"):
+    def __init__(self,base_dir="results_cadence",plot_dir=r"C:\Users\zipar\OneDrive - Delft University of Technology\plots"):
         self.base_dir = Path(base_dir)
         self.plot_dir = Path(plot_dir)
         self.plot_dir.mkdir(exist_ok=True)
@@ -125,10 +125,10 @@ class CadencePlotter:
         plot_df = pd.DataFrame(data).sort_values('code').drop_duplicates('code').reset_index(drop=True)
         
         # --- NEW LOGIC: Remove Code 16 if redundant with Code 15 ---
-        if 16 in plot_df['code'].values and 0 in plot_df['code'].values:
-            y0 = plot_df.loc[plot_df['code'] == 15, 'y'].values[0]
+        if 16 in plot_df['code'].values and 15 in plot_df['code'].values:
+            y15 = plot_df.loc[plot_df['code'] == 15, 'y'].values[0]
             y16 = plot_df.loc[plot_df['code'] == 16, 'y'].values[0]
-            if np.isclose(y0, y16, rtol=1e-3):
+            if np.isclose(y15, y16, rtol=1e-3):
                 plot_df = plot_df[plot_df['code'] != 16].reset_index(drop=True)
         plot_df['label'] = plot_df['code'].apply(lambda c: bin(c)[2:].zfill(bit_count))
         return plot_df
@@ -144,23 +144,35 @@ class CadencePlotter:
         plot_df = self._reconstruct_digital_data(df, signal_name, bit_count)
         if plot_df is None: return
 
-        # Metrics
-        y = plot_df['y'].values
-        y_norm = y - y[0]
-        dr = y_norm.max()
-        res = (y[-1] - y[0]) / (len(y) - 1)
-
-        plt.figure()
-        unit = "W" if "P_" in signal_name or "power" in signal_name.lower() else "s"
+        # 1. Determine Units and Scaling
+        is_power = "P" in signal_name or "power" in signal_name.lower()
+        unit = "W" if is_power else "s"
         scale = 1e6 if unit == "W" else 1e9
         prefix = "u" if unit == "W" else "n"
 
-        plt.plot(plot_df['label'], y_norm * scale, marker='o', color='crimson', 
+        # 2. Select Y data and Y label based on signal type
+        y = plot_df['y'].values
+        if is_power:
+            # Power: Plot raw values from file
+            y_to_plot = y * scale
+            y_axis_label = f"{signal_name} ({prefix}{unit})"
+        else:
+            # Delay: Plot relative distance from first code
+            y_to_plot = (y - y[0]) * scale
+            y_axis_label = f"Relative Delay ({prefix}{unit})"
+
+        # 3. Metrics (Calculated using raw range)
+        dr = y.max() - y.min()
+        res = dr / (len(y) - 1) if len(y) > 1 else 0
+
+        # 4. Plotting
+        plt.figure(figsize=(10, 6))
+        plt.plot(plot_df['label'], y_to_plot, marker='o', color='crimson', 
                  label=f"DR: {dr*scale:.2f}{prefix}{unit}\nRes: {res*scale*1000:.1f}p{unit}")
         
         plt.title(f"{bit_count}-Bit Sweep: {signal_name}")
         plt.xlabel(f"Digital Code (LSB={bit_count-1}...0)")
-        plt.ylabel(f"Relative Value ({prefix}{unit})")
+        plt.ylabel(y_axis_label)
         plt.xticks(rotation=90, fontsize=8)
         plt.grid(True, alpha=0.3)
         plt.legend()
@@ -168,7 +180,6 @@ class CadencePlotter:
 
         save_path = self._get_save_path(filename, signal_name, "sweep")
         plt.savefig(save_path)
-
         plt.close()
 
     def plot_linearity(self, filename, signal_name=None):
@@ -188,7 +199,7 @@ class CadencePlotter:
         inl = np.cumsum(dnl)
 
         fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
-        ax1.bar(plot_df['label'], dnl, color='steelblue', edgecolor='black', alpha=0.8)
+        ax1.plot(plot_df['label'], dnl, marker='o', color='blue', markersize=4)
         ax1.set_ylabel("DNL (LSB)")
         ax1.set_title(f"{bit_count}-Bit Linearity: {signal_name} (LSB={lsb_ideal:.2e})")
         
@@ -202,25 +213,70 @@ class CadencePlotter:
 
         plt.close()
 
-    def plot_histogram(self, filename):
-        """Plots a histogram for Monte Carlo data with Mean and Std Dev."""
-        df, path = self.load_data(filename)
-        if df is None: return None
-        data = pd.to_numeric(df.iloc[:, 0], errors='coerce').dropna()
-        plt.figure()
-        plt.hist(data, bins=30, color='skyblue', edgecolor='black', alpha=0.7)
-        mean, std = data.mean(), data.std()
-        plt.axvline(mean, color='red', linestyle='-', linewidth=2, label=f'Mean: {mean:.3e}')
-        plt.axvline(mean + std, color='orange', linestyle='--', linewidth=1.5, label=f'Std Dev: {std:.3e}')
-        plt.axvline(mean - std, color='orange', linestyle='--')
-        plt.axvspan(mean - std, mean + std, color='orange', alpha=0.1, label='1-$\sigma$ Spread')
-        plt.title(f"Monte Carlo: {path.name}\n($\mu$={mean:.3e}, $\sigma$={std:.3e})")
-        plt.xlabel(df.columns[0].replace(' X', '')); plt.ylabel("Frequency")
-        plt.legend(); plt.grid(True); plt.tight_layout()
+    def plot_histogram(self, filenames):
+        """
+        Plots histograms for Monte Carlo data. 
+        If two files are provided, it calculates DR and Resolution per iteration.
+        """
+        # Handle single file or list of two files
+        if isinstance(filenames, str):
+            filenames = [filenames]
+        
+        datasets = []
+        for f in filenames:
+            df, path = self.load_data(f)
+            if df is not None:
+                datasets.append(df)
+        
+        if not datasets: return
 
-        save_path = self._get_save_path(filename, path.name ,"mc")
+        # --- Case A: Two Files (Calculate DR and Resolution) ---
+        if len(datasets) == 2:
+            # Assume col 0 is the data. Align indices to ensure iterations match.
+            y1 = pd.to_numeric(datasets[0].iloc[:, 0], errors='coerce')
+            y2 = pd.to_numeric(datasets[1].iloc[:, 0], errors='coerce')
+            
+            # DR = |File2 - File1|
+            dr_data = (y2 - y1).abs().dropna()
+            # Resolution = DR / (steps) -> assuming 5-bit (31 steps) if not specified
+            # You can replace 31 with a dynamic bit_count if available
+            res_data = dr_data / 31 
+            
+            metrics = {
+                'Dynamic Range': dr_data,
+                'Resolution': res_data
+            }
+            save_suffix = "mc_derived_metrics"
+        
+        # --- Case B: Single File (Standard Histogram) ---
+        else:
+            data = pd.to_numeric(datasets[0].iloc[:, 0], errors='coerce').dropna()
+            metrics = {datasets[0].columns[0]: data}
+            save_suffix = "mc_standard"
+
+        # --- Plotting Loop ---
+        # If we have 2 metrics (DR/Res), we'll create two subplots
+        fig, axes = plt.subplots(len(metrics), 1, figsize=(10, 6 * len(metrics)))
+        if len(metrics) == 1: axes = [axes]
+
+        for ax, (label, data) in zip(axes, metrics.items()):
+            ax.hist(data, bins=30, color='skyblue', edgecolor='black', alpha=0.7)
+            mean, std = data.mean(), data.std()
+            
+            ax.axvline(mean, color='red', linestyle='-', label=f'Mean: {mean:.3e}')
+            ax.axvline(mean + std, color='orange', linestyle='--', label=f'Std: {std:.3e}')
+            ax.axvline(mean - std, color='orange', linestyle='--')
+            ax.axvspan(mean - std, mean + std, color='orange', alpha=0.1)
+            
+            ax.set_title(f"Monte Carlo: {label}\n($\mu$={mean:.3e}, $\sigma$={std:.3e})")
+            ax.set_xlabel(label)
+            ax.set_ylabel("Frequency")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        save_path = self._get_save_path(filenames[0], "MC_Analysis", save_suffix)
         plt.savefig(save_path)
-
         plt.close()
 
     def plot_corner_temperature_sweep(self, filename):
@@ -339,6 +395,182 @@ class CadencePlotter:
         
         plt.close()
 
+    def plot_pvt_sweep(self, filename, subfigure=False, VDD=False):
+        df, path = self.load_data(filename)
+        if df is None: return
+
+        # 1. Standard Cleaning & Column Detection
+        df['delay'] = pd.to_numeric(df['delay'], errors='coerce')
+        df['P_avg'] = pd.to_numeric(df['P_avg'], errors='coerce')
+        
+        vdd_col = None
+        if VDD:
+            vdd_col = next((c for c in df.columns if c.upper() == 'VDD'), None)
+            if vdd_col:
+                df[vdd_col] = pd.to_numeric(df[vdd_col], errors='coerce')
+            else:
+                VDD = False
+
+        df = df.dropna(subset=['delay'])
+        df['code'] = df['d0'] + 2*df['d1'] + 4*df['d2'] + 8*df['d3'] + 16*(1 - df['d4'])
+        df = df[df['code'] != 16]
+
+        # 2. Base Style Dictionaries
+        df['base_corner'] = df['Corner'].str.split('_').str[0].str.upper()
+        
+        # --- Mode A: VDD is False (Color = Corner, Style = Temp) ---
+        corner_colors_std = {'SS': 'red', 'TT': 'blue', 'FF': 'green', 'SF': 'orange', 'FS': 'purple'}
+        temp_styles_std = {80: '-', 0: '--', -55: ':'} 
+
+        # --- Mode B: VDD is True (Color = Corner_Temp, Style = VDD) ---
+        # Define your specific group colors here
+        pvt_group_colors = {
+            'SS_80': 'darkred', 'SS_0': 'red', 'SS_-55': 'salmon',
+            'TT_80': 'darkblue', 'TT_0': 'blue', 'TT_-55': 'skyblue',
+            'FF_80': 'darkgreen', 'FF_0': 'green', 'FF_-55': 'lime'
+        }
+        vdd_styles = ['-', '--', ':', '-.']
+
+        def plot_metric(y_col, y_label, scale, unit, suffix):
+            unique_corners = sorted(df['base_corner'].unique())
+            
+            if subfigure:
+                fig, axes = plt.subplots(len(unique_corners), 1, figsize=(14, 5 * len(unique_corners)), sharex=True)
+                if len(unique_corners) == 1: axes = [axes]
+            else:
+                plt.figure(figsize=(14, 8))
+                axes = [plt.gca()] * len(unique_corners)
+
+            group_cols = ['Corner', 'temperature', vdd_col] if VDD else ['Corner', 'temperature']
+            
+            for i, base_corner in enumerate(unique_corners):
+                ax = axes[i]
+                corner_group = df[df['base_corner'] == base_corner]
+                
+                if VDD:
+                    unique_vdds = sorted(corner_group[vdd_col].unique())
+                    v_style_map = {v: vdd_styles[idx % len(vdd_styles)] for idx, v in enumerate(unique_vdds)}
+
+                for names, group in corner_group.groupby(group_cols):
+                    c_full, temp = names[0], names[1]
+                    v_val = names[2] if VDD else None
+                    
+                    group = group.sort_values('code')
+                    x_labels = group['code'].apply(lambda c: bin(c)[2:].zfill(5))
+                    y_vals = group[y_col].values * scale
+                    dr = y_vals.max() - y_vals.min()
+                    
+                    lbl = f"{c_full}, {temp}C"
+                    if VDD: lbl += f", {v_val}V"
+                    lbl += f" | DR: {dr:.2f}{unit}"
+
+                    # --- STYLING LOGIC ---
+                    if VDD:
+                        # Construct key like 'SS_80'
+                        color_key = f"{base_corner}_{temp}"
+                        line_color = pvt_group_colors.get(color_key, 'black')
+                        line_style = v_style_map[v_val]
+                    else:
+                        line_color = corner_colors_std.get(base_corner, 'black')
+                        line_style = temp_styles_std.get(temp, '-')
+
+                    ax.plot(x_labels, y_vals, label=lbl, color=line_color, 
+                            linestyle=line_style, marker='o', markersize=3, alpha=0.8)
+
+                ax.set_title(f"Corner: {base_corner}" if subfigure else f"{y_label} vs Code")
+                ax.set_ylabel(f"{y_label} ({unit})")
+                ax.grid(True, alpha=0.3)
+                ax.legend(bbox_to_anchor=(1.01, 1), loc='upper left', fontsize='xx-small')
+
+            plt.xlabel("Digital Code ($b_4b_3b_2b_1b_0$)")
+            plt.xticks(rotation=90, fontsize=8)
+            plt.tight_layout()
+            
+            final_suffix = f"{suffix}_subplots" if subfigure else suffix
+            save_path = self._get_save_path(filename, y_label.replace(' ', '_'), final_suffix)
+            plt.savefig(save_path); plt.close()
+
+        plot_metric('delay', 'Delay', 1e9, 'ns', 'pvt_delay')
+        plot_metric('P_avg', 'Average Power', 1e6, 'uW', 'pvt_power')
+
+    def plot_pvt_linearity(self, filename, subplots=False):
+        """
+        Calculates DNL and INL for PVT data.
+        - subplots: If True, creates a separate row for each corner.
+        """
+        df, path = self.load_data(filename)
+        if df is None: return
+
+        # 1. Clean and Reconstruct
+        df['delay'] = pd.to_numeric(df['delay'], errors='coerce')
+        df = df.dropna(subset=['delay'])
+        df['code'] = df['d0'] + 2*df['d1'] + 4*df['d2'] + 8*df['d3'] + 16*(1 - df['d4'])
+        df = df[df['code'] != 16]
+
+        # 2. Setup Styles
+        df['base_corner'] = df['Corner'].str.split('_').str[0].str.upper()
+        unique_corners = sorted(df['base_corner'].unique())
+        corner_colors = {'SS': 'red', 'TT': 'blue', 'FF': 'green', 'SF': 'orange', 'FS': 'purple'}
+        temp_styles = {80: '-', 0: '--', -55: ':'} 
+
+        # 3. Dynamic Figure Setup
+        if subplots:
+            num_rows = len(unique_corners)
+            fig, axes = plt.subplots(num_rows, 2, figsize=(16, 4 * num_rows), sharex=True)
+            # Ensure axes is 2D even if only one corner exists
+            if num_rows == 1: axes = np.expand_dims(axes, axis=0)
+        else:
+            fig, (ax_dnl, ax_inl) = plt.subplots(2, 1, figsize=(14, 12), sharex=True)
+            # Duplicate the axes references so the loop logic remains the same
+            axes = [[ax_dnl, ax_inl]] * len(unique_corners)
+
+        # 4. Process Each Corner
+        for i, base_corner in enumerate(unique_corners):
+            # If subplots=False, every iteration uses the same ax_dnl/ax_inl
+            # If subplots=True, each iteration uses a unique row
+            cur_ax_dnl = axes[i][0]
+            cur_ax_inl = axes[i][1]
+            
+            corner_group = df[df['base_corner'] == base_corner]
+            
+            for (corner_full, temp), group in corner_group.groupby(['Corner', 'temperature']):
+                group = group.sort_values('code')
+                y = group['delay'].values
+                x_labels = group['code'].apply(lambda c: bin(c)[2:].zfill(5))
+                
+                lsb = (y.max() - y.min()) / (len(y) - 1)
+                dnl = np.insert(np.diff(y) / lsb - 1, 0, 0)
+                inl = np.cumsum(dnl)
+
+                color = corner_colors.get(base_corner, 'black')
+                style = temp_styles.get(temp, '-')
+                lbl = f"{corner_full}, {temp}C"
+
+                cur_ax_dnl.plot(x_labels, dnl, label=lbl, color=color, linestyle=style, marker='o', markersize=2, alpha=0.6)
+                cur_ax_inl.plot(x_labels, inl, label=lbl, color=color, linestyle=style, marker='o', markersize=2, alpha=0.6)
+
+            # Labels for Subplot Mode
+            if subplots:
+                cur_ax_dnl.set_title(f"DNL - {base_corner}")
+                cur_ax_inl.set_title(f"INL - {base_corner}")
+                cur_ax_inl.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='xx-small')
+
+        # 5. Global Formatting
+        if not subplots:
+            axes[0][0].set_title("DNL (Differential Non-Linearity)")
+            axes[0][1].set_title("INL (Integral Non-Linearity)")
+            axes[0][0].legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize='xx-small')
+
+        for ax in fig.axes:
+            ax.grid(True, alpha=0.3)
+            if ax.get_subplotspec().is_last_row():
+                ax.set_xlabel("Digital Code ($b_4b_3b_2b_1b_0$)")
+                ax.tick_params(axis='x', rotation=90, labelsize=8)
+
+        plt.tight_layout()
+        suffix = "pvt_linearity_split" if subplots else "pvt_linearity_combined"
+        save_path = self._get_save_path(filename, "Linearity", suffix)
+        plt.savefig(save_path); plt.close()
 
     def smart_plot(self, filename):
         """Routes any filename to the correct plotting function."""
@@ -375,19 +607,30 @@ plotter = CadencePlotter(base_dir="results_cadence")
 
 # 1. Automatic Plots (Only for sweeps)
 files = [
-    "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv", "cs_power_code_4bit.csv", "cs_power_code_5bit.csv"]
+    "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv", "cs_power_code_4bit.csv", "cs_power_code_5bit.csv", "cs_delay_code_5bit_coarse.csv","cs_power_code_5bit_coarse.csv",
+    "cs_delay_mc_tt_00000.csv", "cs_power_mc_tt_00000.csv", "cs_delay_mc_tt_11111.csv", "cs_power_mc_tt_11111.csv",  "cs_delay_mc_tt_10000.csv", "cs_power_mc_tt_10000.csv"]
 for f in files:
     plotter.smart_plot(f)
 
 # 2. plot transients
-plotter.plot_signals("cs_Pinst_4bit.csv")
-plotter.plot_signals("cs_signals_code_4bit.csv")
-plotter.plot_signals("cs_Pinst_5bit.csv")
+plotter.plot_signals("cs_Pinst_code_4bit.csv", filters=["d0=0,d1=0,d2=0,d3=0", "d0=0,d1=0,d2=0,d3=1",  "d0=1,d1=1,d2=1,d3=0", "d0=1,d1=1,d2=1,d3=1"], t_range=(40e-9,100e-9), subplots=True)
+plotter.plot_signals("cs_signals_code_4bit.csv", filters=["d0=0,d1=0,d2=0,d3=0", "d0=0,d1=0,d2=0,d3=1", "d0=1,d1=1,d2=1,d3=0", "d0=1,d1=1,d2=1,d3=1"], t_range=(40e-9,100e-9), subplots=True)
+plotter.plot_signals("cs_Pinst_code_5bit.csv", filters=["d0=0,d1=0,d2=0,d3=0,d4=0", "d0=0,d1=0,d2=0,d3=1,d4=1", "d0=0,d1=0,d2=0,d3=0,d4=1", "d0=1,d1=1,d2=1,d3=0,d4=0", "d0=1,d1=1,d2=1,d3=1,d4=0"], t_range=(40e-9,120e-9), subplots=True)
 plotter.plot_signals("cs_signals_code_5bit.csv",filters=["d0=0,d1=0,d2=0,d3=0,d4=0", "d0=0,d1=0,d2=0,d3=1,d4=1", "d0=0,d1=0,d2=0,d3=0,d4=1", "d0=1,d1=1,d2=1,d3=0,d4=0", "d0=1,d1=1,d2=1,d3=1,d4=0"], t_range=(40e-9,120e-9), subplots=True )
 
 # 3. plot lineartity
 plotter.plot_linearity("cs_delay_code_4bit.csv")
 plotter.plot_linearity("cs_delay_code_5bit.csv")
+plotter.plot_linearity("cs_delay_code_5bit_coarse.csv")
+
+# 4. PVT analysis 
+plotter.plot_pvt_sweep("cs_delay_power_corner_T.csv", subfigure=False)
+plotter.plot_pvt_sweep("cs_delay_power_VDD_corner_T.csv", VDD=True, subfigure=True)
+plotter.plot_pvt_linearity("cs_delay_power_corner_T.csv", subplots= False)
+
+
+#5. plot histogram for resolution and dynamic range
+plotter.plot_histogram(["cs_delay_mc_tt_00000.csv", "cs_delay_mc_tt_11111.csv"])
 
 # Same for variable slope
 # 1. Automatic Plots (Only for sweeps)
@@ -404,4 +647,6 @@ plotter.plot_signals("vs_signals_code_3bit.csv", t_range=[40e-9, 80e-9], subplot
 
 # 3. plot lineartity
 plotter.plot_linearity("vs_delay_code_3bit.csv")
+plotter.plot_linearity("vs_delay_Cap.csv")
+
 
