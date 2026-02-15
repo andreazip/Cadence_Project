@@ -19,7 +19,7 @@ plt.rcParams.update({
 })
 
 class CadencePlotter:
-    def __init__(self,base_dir="results_cadence",plot_dir=r"C:\Users\zipar\OneDrive - Delft University of Technology\plots"):
+    def __init__(self,base_dir="results_cadence",plot_dir=r"C:\Users\zipar\OneDrive - Delft University of Technology\Second Year\MEP\\plots"):
         self.base_dir = Path(base_dir)
         self.plot_dir = Path(plot_dir)
         self.plot_dir.mkdir(exist_ok=True)
@@ -53,12 +53,16 @@ class CadencePlotter:
     def _get_save_path(self, filename, signal_name, plot_type):
         """Routes files to 'variable_slope' or 'constant_slope' subfolders."""
         subfolder = "other"
-        fname_lower = str(filename).lower()
+        fname_lower = Path(filename).name.lower()
         
-        if "vs" in fname_lower:
+        if fname_lower.startswith("vs"):
             subfolder = "variable_slope"
-        elif "cs" in fname_lower:
+        elif fname_lower.startswith("cs"):
             subfolder = "constant_slope"
+        elif fname_lower.startswith("dlcsi"):
+            subfolder = "delayline_csi"
+        elif fname_lower.startswith("pi"):
+            subfolder = "Phase_interpolator"
         
         # Create the subfolder path
         target_dir = self.plot_dir / subfolder
@@ -83,54 +87,76 @@ class CadencePlotter:
             return len(found_bits) + 1 # +1 for the sweep bit
         return 3 # Default
 
-    def _reconstruct_digital_data(self, df, signal_name, bit_count):
-        """Generic reconstruction for any bit depth."""
+    def _reconstruct_digital_data(self, df, filename, signal_name, bit_count):
+        """Generic reconstruction for any bit depth with PI thermometer support."""
         data = []
+        
+        # --- STRICT FILENAME CHECK ---
+        is_cs = Path(filename).name.lower().startswith("cs")
+        is_pi = Path(filename).name.lower().startswith("pi")
+        
         # Find all columns for this signal
-        x_cols = [c for c in df.columns if c.startswith(signal_name) and c.endswith(' X')]
+        x_cols = [c for c in df.columns if c.startswith(signal_name) and (c.endswith(' X') or c.endswith('X'))]
         if not x_cols:
             return None
 
         for x_col in x_cols:
-            y_col = x_col[:-2] + ' Y'
-            # Extract bits from header: d0=0, d1=1...
-            header_bits = re.findall(r"[db](\d+)=(\d+)", x_col)
-            header_val = 0
-            found_indices = []
-            for b_idx, b_val in header_bits:
-                idx, val = int(b_idx), int(b_val)
-                header_val |= (val << idx)
-                found_indices.append(idx)
+            # Handle variations in whitespace for Cadence headers
+            y_col = x_col[:-1] + 'Y' if x_col.endswith('X') else x_col[:-2] + ' Y'
+            if y_col not in df.columns: continue
+
+            # regex includes 's' bits for PI thermometer codes
+            header_bits = re.findall(r"([dbs])(\d+)=(\d+)", x_col)
             
-            # Identify the swept bit index (the one missing from the header)
+            bit_dict = {}
+            for prefix, b_idx, b_val in header_bits:
+                bit_dict[int(b_idx)] = int(b_val)
+            
             all_indices = set(range(bit_count))
-            missing = sorted(list(all_indices - set(found_indices)))
+            found_indices = set(bit_dict.keys())
+            missing = sorted(list(all_indices - found_indices))
             sweep_bit_idx = missing[0] if missing else bit_count - 1
 
             temp = df[[x_col, y_col]].apply(pd.to_numeric, errors='coerce').dropna()
             for _, row in temp.iterrows():
                 x_val = int(row[x_col])
                 
-                # Special Inversion Logic for 5-bit (as per user request)
-                # If 5th bit is being swept, d4 = NOT(x)
-                if bit_count == 5 and sweep_bit_idx == 4:
+                # Apply inversion logic ONLY if it is a constant slope (cs) 5-bit file
+                if is_cs and bit_count == 5 and sweep_bit_idx == 4:
                     d_sweep = 1 - x_val
                 else:
                     d_sweep = x_val
 
-                code = header_val | (d_sweep << sweep_bit_idx)
-                data.append({'code': code, 'y': row[y_col]})
+                # Construct full bit state for this data point
+                current_bits = bit_dict.copy()
+                current_bits[sweep_bit_idx] = d_sweep
+                
+                # DETERMINE CODE AND LABEL
+                if is_pi:
+                    # For PI, code is the sum of bits (thermometer level)
+                    code = sum(current_bits.values())
+                    # Construct label string directly (MSB to LSB)
+                    label = "".join(str(current_bits.get(i, 0)) for i in range(bit_count-1, -1, -1))
+                else:
+                    # Standard binary weighted logic
+                    code = 0
+                    for idx, val in current_bits.items():
+                        code |= (val << idx)
+                    label = bin(code)[2:].zfill(bit_count)
+
+                data.append({'code': code, 'y': row[y_col], 'label': label})
         
         if not data: return None
         plot_df = pd.DataFrame(data).sort_values('code').drop_duplicates('code').reset_index(drop=True)
         
-        # --- NEW LOGIC: Remove Code 16 if redundant with Code 15 ---
-        if 16 in plot_df['code'].values and 15 in plot_df['code'].values:
-            y15 = plot_df.loc[plot_df['code'] == 15, 'y'].values[0]
-            y16 = plot_df.loc[plot_df['code'] == 16, 'y'].values[0]
-            if np.isclose(y15, y16, rtol=1e-3):
-                plot_df = plot_df[plot_df['code'] != 16].reset_index(drop=True)
-        plot_df['label'] = plot_df['code'].apply(lambda c: bin(c)[2:].zfill(bit_count))
+        # --- Remove Code 16 ONLY if it is a constant slope (cs) file ---
+        if is_cs:
+            if 16 in plot_df['code'].values and 15 in plot_df['code'].values:
+                y15 = plot_df.loc[plot_df['code'] == 15, 'y'].values[0]
+                y16 = plot_df.loc[plot_df['code'] == 16, 'y'].values[0]
+                if np.isclose(y15, y16, rtol=1e-3):
+                    plot_df = plot_df[plot_df['code'] != 16].reset_index(drop=True)
+        
         return plot_df
 
     def plot_digital_sweep(self, filename, signal_name=None):
@@ -141,7 +167,8 @@ class CadencePlotter:
         if signal_name is None:
             signal_name = df.columns[0].split(' (')[0].split(' ')[0]
 
-        plot_df = self._reconstruct_digital_data(df, signal_name, bit_count)
+
+        plot_df = self._reconstruct_digital_data(df, filename, signal_name, bit_count)
         if plot_df is None: return
 
         # 1. Determine Units and Scaling
@@ -190,11 +217,11 @@ class CadencePlotter:
         if signal_name is None:
             signal_name = df.columns[0].split(' (')[0].split(' ')[0]
 
-        plot_df = self._reconstruct_digital_data(df, signal_name, bit_count)
+        plot_df = self._reconstruct_digital_data(df, filename, signal_name, bit_count)
         if plot_df is None: return
 
         y = plot_df['y'].values
-        lsb_ideal = (y[-1] - y[0]) / (len(y) - 1)
+        lsb_ideal = (y[-1] - y[0]) / (len(y) - 1) if len(y) > 1 else 0
         dnl = np.insert(np.diff(y) / lsb_ideal - 1, 0, 0)
         inl = np.cumsum(dnl)
 
@@ -607,7 +634,7 @@ plotter = CadencePlotter(base_dir="results_cadence")
 
 # 1. Automatic Plots (Only for sweeps)
 files = [
-    "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv", "cs_power_code_4bit.csv", "cs_power_code_5bit.csv", "cs_delay_code_5bit_coarse.csv","cs_power_code_5bit_coarse.csv",
+    "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv", "cs_delay_code_5bit_nonidealcurs.csv", "cs_power_code_4bit.csv", "cs_power_code_5bit.csv", "cs_delay_code_5bit_coarse.csv", "cs_power_code_5bit_nonidealcurs.csv", "cs_power_code_5bit_coarse.csv",
     "cs_delay_mc_tt_00000.csv", "cs_power_mc_tt_00000.csv", "cs_delay_mc_tt_11111.csv", "cs_power_mc_tt_11111.csv",  "cs_delay_mc_tt_10000.csv", "cs_power_mc_tt_10000.csv"]
 for f in files:
     plotter.smart_plot(f)
@@ -622,6 +649,7 @@ plotter.plot_signals("cs_signals_code_5bit.csv",filters=["d0=0,d1=0,d2=0,d3=0,d4
 plotter.plot_linearity("cs_delay_code_4bit.csv")
 plotter.plot_linearity("cs_delay_code_5bit.csv")
 plotter.plot_linearity("cs_delay_code_5bit_coarse.csv")
+plotter.plot_linearity("cs_delay_code_5bit_nonidealcurs.csv")
 
 # 4. PVT analysis 
 plotter.plot_pvt_sweep("cs_delay_power_corner_T.csv", subfigure=False)
@@ -635,18 +663,25 @@ plotter.plot_histogram(["cs_delay_mc_tt_00000.csv", "cs_delay_mc_tt_11111.csv"])
 # Same for variable slope
 # 1. Automatic Plots (Only for sweeps)
 files = [
-    "vs_delay_code_3bit.csv", "vs_delay_invstrength.csv", "vs_delay_Cap.csv", "vs_delay_vdd.csv", "vs_delay_mc_tt.csv",
-    "vs_power_code_3bit.csv", "vs_power_invstrength.csv", "vs_power_Cap.csv", "vs_power_vdd.csv", "vs_power_mc_tt.csv",
-    "vs_delay_T_corner.csv", "vs_power_T_corner.csv"]
+    "dlcsi_delay_code_5bit.csv", "dlcsi_power_code_5bit.csv"]
 for f in files:
     plotter.smart_plot(f)
 
 # 2. plot transients
-plotter.plot_signals("vs_signals_Cap.csv", t_range=[40e-9, 80e-9], subplots=True)
-plotter.plot_signals("vs_signals_code_3bit.csv", t_range=[40e-9, 80e-9], subplots=True)
+
 
 # 3. plot lineartity
-plotter.plot_linearity("vs_delay_code_3bit.csv")
-plotter.plot_linearity("vs_delay_Cap.csv")
+plotter.plot_linearity("dlcsi_delay_code_5bit.csv")
+
+# Same for variable slope
+# 1. Automatic Plots (Only for sweeps)
+files = [
+    "pi_delay_code_4bit.csv", "pi_power_code_4bit.csv"]
+for f in files:
+    plotter.smart_plot(f)
+
+# 2. plot transients
 
 
+# 3. plot lineartity
+plotter.plot_linearity("pi_delay_code_4bit.csv")
