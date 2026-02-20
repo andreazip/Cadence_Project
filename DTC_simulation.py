@@ -8,36 +8,40 @@ def E_msb_1(Ca, C_k, Vdd):
     return (Ca-C_k)*Vdd
 
 RUN = {
-    "DAC_mismatch": False,
-    "CLM": True
+    "DAC_mismatch": True,
+    "CLM":False
 }
 
 #define delay in the DTC by using 
 n = 8 #number of bits
 N = 2**n-1 #max ndigital number
-Cu = 10e-15 #unit capacitance size
+Cu = 30e-15 #unit capacitance size
 
 # Generate mismatched binary capacitors
 C_array = np.zeros(n-1)
 
-mismatch_factor = 0.005 #set mismatch capacitor
+#sigmaC/C = Ac/sqrt(A) Pelgrom's law, where A is the area of the capacitor and Ac is a process-dependent constant. Assuming C = Cu, we can express the mismatch as sigmaC/C = Ac/sqrt(Cu). For a given mismatch factor (e.g., 0.003), we can derive Ac as follows:
+Ac = 5.218e-3 #nm, which is a typical value for modern processes
+A = 15 #um^2, which is a typical area for a 30fF capacitor
+
+sigma_c = Ac / np.sqrt(A)*Cu  # Calculate sigmaC based on Pelgrom's law
 
 for j in range(n-1):
         ideal_value = (2**j) * Cu
         if RUN["DAC_mismatch"] :
-            mismatch = 1 + np.random.randn() * mismatch_factor
+            mismatch =  np.random.randn() * sigma_c
         else:
-            mismatch = 1
-        C_array[j] = ideal_value * mismatch
+            mismatch = 0
+        C_array[j] = ideal_value + mismatch
 
 Ca = np.sum(C_array)
-C0= Ca*8/3
+C0= 338*Cu
 
 Vdd = 1.1 #V
 
-Vth = Vdd - 0.35
-Ich = 150e-9 #A
-Cramp = 2.5e-15 #F
+Vth = Vdd/2 #V
+Ich = 300e-9 #A
+Cramp = 5e-15 #F
 
 k = -Ich/Cramp
 
@@ -65,13 +69,9 @@ for i in range(N):
 delay = np.zeros(N)
 for i, Vst in enumerate(Vst_array):
     # Effective current including CLM if enabled
-    if RUN["CLM"]:
-        Ich_eff = Ich * (1 + lambda_clm * (Vst-0.7))
-    else:
-        Ich_eff = Ich
 
     # Recalculate slope k
-    k_eff = -Ich_eff / Cramp
+    k_eff = -Ich/Cramp
 
     # Delay
     delay[i] = (Vth - Vst) / k_eff
@@ -133,7 +133,7 @@ if RUN["DAC_mismatch"]:
         # binary capacitor array
         C_array = np.zeros(n-1)
         for j in range(n-1):
-            C_array[j] = (2**j)*Cu*(1 + np.random.randn()*mismatch_factor)
+            C_array[j] = (2**j)*(Cu + np.random.randn()*sigma_c)
 
         Ca = np.sum(C_array)
 

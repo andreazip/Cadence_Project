@@ -1,21 +1,57 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib
 import re
 import numpy as np
 from pathlib import Path
 
-# --- Presentation Style ---
+# ============================================================================
+# PUBLICATION-READY PLOT STYLE
+# ============================================================================
+# Set font for scientific publications - Arial is universally available
+matplotlib.rcParams['font.family'] = 'sans-serif'
+matplotlib.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
+
 plt.rcParams.update({
-    "font.size": 12,
-    "axes.titlesize": 16,
+    # Font sizes
+    "font.size": 11,
+    "axes.titlesize": 14,
     "axes.labelsize": 12,
     "xtick.labelsize": 10,
     "ytick.labelsize": 10,
-    "legend.fontsize": 9,
-    "figure.figsize": (12, 7),
-    "lines.linewidth": 2,
-    "grid.alpha": 0.4,
-    "grid.linestyle": "--"
+    "legend.fontsize": 10,
+    "figure.figsize": (10, 6),
+    
+    # Line and marker styles
+    "lines.linewidth": 2.0,
+    "lines.markersize": 6,
+    "lines.markeredgewidth": 1.2,
+    
+    # Grid
+    "grid.alpha": 0.3,
+    "grid.linestyle": "-",
+    "grid.linewidth": 0.8,
+    
+    # Figure
+    "figure.dpi": 100,
+    "savefig.dpi": 300,  # High resolution for saving
+    "savefig.bbox": "tight",
+    "savefig.pad_inches": 0.05,
+    
+    # Axes
+    "axes.linewidth": 1.2,
+    "axes.edgecolor": "black",
+    "xtick.major.width": 1.2,
+    "xtick.minor.width": 0.8,
+    "ytick.major.width": 1.2,
+    "ytick.minor.width": 0.8,
+    "xtick.direction": "in",
+    "ytick.direction": "in",
+    
+    # Legend
+    "legend.frameon": True,
+    "legend.framealpha": 0.95,
+    "legend.edgecolor": "black",
 })
 
 class CadencePlotter:
@@ -23,6 +59,71 @@ class CadencePlotter:
         self.base_dir = Path(base_dir)
         self.plot_dir = Path(plot_dir)
         self.plot_dir.mkdir(exist_ok=True)
+        
+        # Color palette for consistent styling
+        self.colors = {
+            'primary': '#D62728',      # Crimson
+            'secondary': '#1F77B4',    # Blue
+            'tertiary': '#2CA02C',     # Green
+            'quaternary': '#FF7F0E'    # Orange
+        }
+
+    # ========================================================================
+    # HELPER METHODS - Reduce Redundancy
+    # ========================================================================
+    
+    def _save_figure(self, fig, save_path, dpi=300, bbox_inches='tight'):
+        """Unified figure saving with consistent parameters."""
+        fig.canvas.draw()  # Ensure figure is fully rendered
+        fig.savefig(save_path, dpi=dpi, bbox_inches=bbox_inches, pad_inches=0.05)
+        print(f"  Saved: {save_path.name}")
+        plt.close(fig)  # Close specific figure
+    
+    def _create_figure(self, nrows=1, ncols=1, figsize=None, sharex=False, sharey=False):
+        """Unified figure creation with consistent parameters."""
+        if figsize is None:
+            figsize = (10, 6) if nrows == 1 else (10, 5*nrows)
+        
+        if nrows == 1 and ncols == 1:
+            fig, ax = plt.subplots(figsize=figsize)
+            return fig, ax
+        else:
+            return plt.subplots(nrows, ncols, figsize=figsize, sharex=sharex, sharey=sharey)
+    
+    def _apply_grid_styling(self, ax, alpha=0.3):
+        """Apply consistent grid styling."""
+        ax.grid(True, alpha=alpha, linestyle='-', linewidth=0.8)
+        ax.set_axisbelow(True)
+    
+    def _format_plot_labels(self, ax, xlabel=None, ylabel=None, title=None):
+        """Apply consistent label formatting."""
+        if xlabel:
+            ax.set_xlabel(xlabel, fontsize=12, fontweight='bold')
+        if ylabel:
+            ax.set_ylabel(ylabel, fontsize=12, fontweight='bold')
+        if title:
+            ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+    
+    def _get_metric_info(self, filename, metric_col=None):
+        """Get metric type info (power vs delay) and scaling."""
+        is_power = any(x in filename.lower() for x in ['power', 'p_avg', 'pinst'])
+        
+        if is_power:
+            return {
+                'is_power': True,
+                'scale': 1e6,
+                'prefix': 'μ',
+                'unit': 'W',
+                'name': 'Power'
+            }
+        else:
+            return {
+                'is_power': False,
+                'scale': 1e9,
+                'prefix': 'n',
+                'unit': 's',
+                'name': 'Delay'
+            }
 
     def _sanitize(self, name):
         """Replaces characters like '/' or '\' that break file paths."""
@@ -87,8 +188,103 @@ class CadencePlotter:
             return len(found_bits) + 1 # +1 for the sweep bit
         return 3 # Default
 
+    def _filter_mc_iterations(self, df):
+        return df
+
+    def _reconstruct_mc_iteration_data(self, df, filename, bit_count, metric_col):
+        """Reconstruct codes for a single MC iteration without averaging."""
+        df = self._filter_mc_iterations(df)
+
+        bit_cols = sorted([c for c in df.columns if c.startswith('d') and c[1:].isdigit()])
+        if len(bit_cols) < bit_count:
+            return None
+
+        df_clean = df[bit_cols + [metric_col]].copy()
+        df_clean = df_clean.apply(pd.to_numeric, errors='coerce').dropna()
+
+        is_cs = Path(filename).name.lower().startswith("cs")
+        codes = np.zeros(len(df_clean), dtype=int)
+        for bit_col in bit_cols:
+            bit_idx = int(bit_col[1:])
+            bit_vals = df_clean[bit_col].astype(int).values
+            if is_cs and bit_count == 5 and bit_idx == 4:
+                bit_vals = 1 - bit_vals
+            codes = codes | (bit_vals << bit_idx)
+
+        df_clean['code'] = codes
+        df_clean = df_clean.sort_values('code').drop_duplicates('code').reset_index(drop=True)
+
+        if is_cs:
+            if 15 in df_clean['code'].values:
+                df_clean = df_clean[df_clean['code'] != 15].reset_index(drop=True)
+
+        df_clean['label'] = df_clean['code'].apply(lambda c: bin(int(c))[2:].zfill(bit_count))
+        df_clean['code_index'] = np.arange(len(df_clean))
+        df_clean['label_index'] = df_clean['code_index'].apply(lambda c: bin(int(c))[2:].zfill(bit_count))
+        df_clean['y'] = df_clean[metric_col]
+        return df_clean
+
+    def _reconstruct_mc_code_sweep(self, df, filename, bit_count):
+        """Reconstruct digital codes from individual bit columns in Monte Carlo data.
+        Format: Columns like d0, d1, d2, d3, d4 with a 'delay' or 'P_avg' column."""
+        df = self._filter_mc_iterations(df)
+        # Identify the metric column (delay or power)
+        metric_col = None
+        for col in ['delay', 'power', 'P_avg']:
+            if col in df.columns:
+                metric_col = col
+                break
+        if metric_col is None:
+            return None
+        
+        # Find all bit columns (d0, d1, d2, d3, d4)
+        bit_cols = sorted([c for c in df.columns if c.startswith('d') and c[1:].isdigit()])
+        if len(bit_cols) < bit_count:
+            return None
+        
+        # Reconstruct codes from bits
+        df_clean = df[bit_cols + [metric_col]].copy()
+        df_clean = df_clean.apply(pd.to_numeric, errors='coerce').dropna()
+        
+        # Calculate binary codes using numpy operations
+        is_cs = Path(filename).name.lower().startswith("cs")
+        codes = np.zeros(len(df_clean), dtype=int)
+        for bit_col in bit_cols:
+            bit_idx = int(bit_col[1:])
+            bit_vals = df_clean[bit_col].astype(int).values
+            if is_cs and bit_count == 5 and bit_idx == 4:
+                bit_vals = 1 - bit_vals
+            codes = codes | (bit_vals << bit_idx)
+        
+        df_clean['code'] = codes
+        
+        # Group by code and calculate statistics
+        data = []
+        for code in sorted(np.unique(codes)):
+            group_data = df_clean[df_clean['code'] == code][metric_col]
+            if len(group_data) == 0:
+                continue
+            
+            # Average across MC iterations
+            y_val = group_data.mean()
+            label = bin(int(code))[2:].zfill(bit_count)
+            data.append({'code': int(code), 'y': y_val, 'label': label})
+        
+        if not data:
+            return None
+        
+        plot_df = pd.DataFrame(data).sort_values('code').drop_duplicates('code').reset_index(drop=True)
+        
+        # --- Remove Code 16 ONLY if it is a constant slope (cs) file ---
+        if is_cs:
+            if 15 in plot_df['code'].values:
+                plot_df = plot_df[plot_df['code'] != 15].reset_index(drop=True)
+        
+        return plot_df
+
     def _reconstruct_digital_data(self, df, filename, signal_name, bit_count):
         """Generic reconstruction for any bit depth with PI thermometer support."""
+        df = self._filter_mc_iterations(df)
         data = []
         
         # --- STRICT FILENAME CHECK ---
@@ -149,17 +345,18 @@ class CadencePlotter:
         if not data: return None
         plot_df = pd.DataFrame(data).sort_values('code').drop_duplicates('code').reset_index(drop=True)
         
-        # --- Remove Code 16 ONLY if it is a constant slope (cs) file ---
+        # --- Remove Code 15 ONLY if it is a constant slope (cs) file ---
         if is_cs:
-            if 16 in plot_df['code'].values and 15 in plot_df['code'].values:
-                y15 = plot_df.loc[plot_df['code'] == 15, 'y'].values[0]
-                y16 = plot_df.loc[plot_df['code'] == 16, 'y'].values[0]
-                if np.isclose(y15, y16, rtol=1e-3):
-                    plot_df = plot_df[plot_df['code'] != 16].reset_index(drop=True)
+            if 15 in plot_df['code'].values:
+                plot_df = plot_df[plot_df['code'] != 15].reset_index(drop=True)
+
+        plot_df['code_index'] = np.arange(len(plot_df))
+        plot_df['label_index'] = plot_df['code_index'].apply(lambda c: bin(int(c))[2:].zfill(bit_count))
         
         return plot_df
 
-    def plot_digital_sweep(self, filename, signal_name=None):
+    def plot_digital_sweep(self, filename, signal_name=None, max_iterations=20):
+        """Plot digital code sweeps with improved styling and metrics."""
         df, path = self.load_data(filename)
         if df is None: return
         
@@ -167,49 +364,193 @@ class CadencePlotter:
         if signal_name is None:
             signal_name = df.columns[0].split(' (')[0].split(' ')[0]
 
+        # Check if this is MC code sweep format
+        has_bit_cols = all(f'd{i}' in df.columns for i in range(bit_count))
+        has_x_y_cols = any(c.endswith(' X') or c.endswith('X') for c in df.columns)
+        
+        # MC per-iteration plotting
+        if has_bit_cols and not has_x_y_cols and 'mc_iteration' in df.columns:
+            df = self._filter_mc_iterations(df)
+            metric_col = next((c for c in ['delay', 'power', 'P_avg'] if c in df.columns), None)
+            if metric_col is None:
+                return
 
-        plot_df = self._reconstruct_digital_data(df, filename, signal_name, bit_count)
-        if plot_df is None: return
+            iterations = sorted(df['mc_iteration'].unique())[:max_iterations]
+            metric_info = self._get_metric_info(signal_name)
+            
+            fig, ax = self._create_figure(figsize=(11, 6))
+            
+            for idx, iteration in enumerate(iterations):
+                df_iter = df[df['mc_iteration'] == iteration].copy()
+                plot_df = self._reconstruct_mc_iteration_data(df_iter, filename, bit_count, metric_col)
+                if plot_df is None:
+                    continue
+                
+                y = plot_df['y'].values
+                y_to_plot = (y - y[0]) * metric_info['scale'] if not metric_info['is_power'] else y * metric_info['scale']
+                
+                alpha = max(0.1, 1.0 - idx/len(iterations))
+                ax.plot(plot_df['label'], y_to_plot, marker='o', linewidth=1.5, 
+                       alpha=alpha, color=self.colors['secondary'],
+                       label=f"Run {idx+1}" if idx % 5 == 0 else None)
+            
+            self._format_plot_labels(ax,
+                                    xlabel=f"Digital Code",
+                                    ylabel=f"Relative {metric_info['name']} ({metric_info['prefix']}{metric_info['unit']})",
+                                    title=f"{bit_count}-Bit Monte Carlo Sweep - {path.stem.replace('_', ' ').title()}"
+            )
+            ax.tick_params(axis='x', rotation=45)
+            ax.legend(fontsize=9, loc='best', ncol=2)
+            self._apply_grid_styling(ax)
+            
+            plt.tight_layout()
+            save_path = self._get_save_path(filename, signal_name, "sweep_mc_all_iterations")
+            self._save_figure(fig, save_path)
+            return
 
-        # 1. Determine Units and Scaling
-        is_power = "P" in signal_name or "power" in signal_name.lower()
-        unit = "W" if is_power else "s"
-        scale = 1e6 if unit == "W" else 1e9
-        prefix = "u" if unit == "W" else "n"
-
-        # 2. Select Y data and Y label based on signal type
-        y = plot_df['y'].values
-        if is_power:
-            # Power: Plot raw values from file
-            y_to_plot = y * scale
-            y_axis_label = f"{signal_name} ({prefix}{unit})"
+        # Standard digital sweep
+        if has_bit_cols and not has_x_y_cols:
+            plot_df = self._reconstruct_mc_code_sweep(df, filename, bit_count)
         else:
-            # Delay: Plot relative distance from first code
-            y_to_plot = (y - y[0]) * scale
-            y_axis_label = f"Relative Delay ({prefix}{unit})"
+            plot_df = self._reconstruct_digital_data(df, filename, signal_name, bit_count)
+        
+        if plot_df is None:
+            return
 
-        # 3. Metrics (Calculated using raw range)
-        dr = y.max() - y.min()
+        y = plot_df['y'].values
+        metric_info = self._get_metric_info(signal_name)
+        
+        # Calculate metrics
+        y_to_plot = (y - y[0]) * metric_info['scale'] if not metric_info['is_power'] else y * metric_info['scale']
+        dr = (y.max() - y.min()) * metric_info['scale']
         res = dr / (len(y) - 1) if len(y) > 1 else 0
 
-        # 4. Plotting
-        plt.figure(figsize=(10, 6))
-        plt.plot(plot_df['label'], y_to_plot, marker='o', color='crimson', 
-                 label=f"DR: {dr*scale:.2f}{prefix}{unit}\nRes: {res*scale*1000:.1f}p{unit}")
+        # Plot
+        fig, ax = self._create_figure(figsize=(11, 6))
+        ax.plot(plot_df['label'], y_to_plot, marker='o', color=self.colors['primary'], 
+                linewidth=2.5, markersize=5, 
+                label=f"DR: {dr:.3f}{metric_info['prefix']}{metric_info['unit']} | "
+                      f"Res: {res*1000:.2f}p{metric_info['unit']}")
         
-        plt.title(f"{bit_count}-Bit Sweep: {signal_name}")
-        plt.xlabel(f"Digital Code (LSB={bit_count-1}...0)")
-        plt.ylabel(y_axis_label)
-        plt.xticks(rotation=90, fontsize=8)
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-        plt.tight_layout()
+        self._format_plot_labels(ax,
+                                xlabel=f"Digital Code (LSB={bit_count-1}...0)",
+                                ylabel=f"Relative {metric_info['name']} ({metric_info['prefix']}{metric_info['unit']})",
+                                title=f"{bit_count}-Bit Digital Sweep"
+        )
+        ax.tick_params(axis='x', rotation=45)
+        ax.legend(fontsize=10, loc='best')
+        self._apply_grid_styling(ax)
 
+        plt.tight_layout()
         save_path = self._get_save_path(filename, signal_name, "sweep")
+        self._save_figure(fig, save_path)
+
+    def plot_mc_linearity_per_iteration(self, filename, lsb_ns=None, max_iterations=20):
+        """
+        Plot DNL and INL for each individual MC realization.
+        
+        Args:
+            filename: MC data file
+            lsb_ns: Resolution in nanoseconds (default: 0.3 ns)
+        """
+        df, path = self.load_data(filename)
+        if df is None: return
+        
+        bit_count = self._get_bit_info(filename, df)
+        lsb = lsb_ns * 1e-9 if lsb_ns is not None else None
+        
+        # Find metric column
+        metric_col = None
+        for col in ['delay', 'power', 'P_avg']:
+            if col in df.columns:
+                metric_col = col
+                break
+        if metric_col is None: return
+        
+        # Find bit columns
+        bit_cols = sorted([c for c in df.columns if c.startswith('d') and c[1:].isdigit()])
+        if len(bit_cols) < bit_count:
+            return
+        
+        # Check for mc_iteration column
+        if 'mc_iteration' not in df.columns:
+            print(f"Warning: No 'mc_iteration' column in {filename}")
+            return
+
+        df = self._filter_mc_iterations(df)
+        
+        # Create figure with 2 subplots (DNL and INL)
+        fig, (ax_dnl, ax_inl) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+        
+        # Iterate through each MC realization
+        iterations = sorted(df['mc_iteration'].unique())[:max_iterations]
+        num_iterations = len(iterations)
+        
+        # Create a colormap for iterations
+        colors = plt.cm.viridis(np.linspace(0, 1, num_iterations))
+        
+        for idx, iteration in enumerate(iterations):
+            df_iter = df[df['mc_iteration'] == iteration].copy()
+            plot_df = self._reconstruct_mc_iteration_data(df_iter, filename, bit_count, metric_col)
+            if plot_df is None:
+                continue
+
+            y = plot_df['y'].values
+            x_labels = plot_df['label_index'] if 'label_index' in plot_df.columns else plot_df['label']
+            
+            # Calculate DNL and INL
+            if len(y) > 1:
+                if lsb is None:
+                    lsb_ideal = (y[-1] - y[0]) / (len(y) - 1)
+                else:
+                    lsb_ideal = lsb
+                if lsb_ideal == 0:
+                    continue
+                dnl = np.insert(np.diff(y) / lsb_ideal - 1, 0, 0)
+                inl = np.cumsum(dnl)
+                
+                # Plot with transparency
+                ax_dnl.plot(x_labels, dnl, marker='o', markersize=3, 
+                           color=colors[idx], alpha=0.3, linewidth=0.8,
+                           label=f"Iter {iteration}" if idx % (num_iterations // 5 + 1) == 0 else "")
+                ax_inl.plot(x_labels, inl, marker='o', markersize=3,
+                           color=colors[idx], alpha=0.3, linewidth=0.8,
+                           label=f"Iter {iteration}" if idx % (num_iterations // 5 + 1) == 0 else "")
+        
+        # Formatting
+        ax_dnl.set_ylabel("DNL (LSB)")
+        if lsb is None:
+            ax_dnl.set_title(f"DNL - All MC Realizations ({num_iterations} iterations, LSB=ideal)")
+        else:
+            if lsb is None:
+                ax_dnl.set_title(f"DNL - All MC Realizations ({num_iterations} iterations, LSB=ideal)")
+            else:
+                ax_dnl.set_title(f"DNL - All MC Realizations ({num_iterations} iterations, LSB={lsb_ns} ns)")
+        ax_dnl.grid(True, alpha=0.3)
+        ax_dnl.axhline(y=0, color='black', linestyle='--', linewidth=0.5, alpha=0.5)
+        
+        ax_inl.set_ylabel("INL (LSB)")
+        if lsb is None:
+            ax_inl.set_title("INL - All MC Realizations (LSB=ideal)")
+        else:
+            if lsb is None:
+                ax_inl.set_title("INL - All MC Realizations (LSB=ideal)")
+            else:
+                ax_inl.set_title(f"INL - All MC Realizations (LSB={lsb_ns} ns)")
+        ax_inl.set_xlabel("Digital Code ($b_4b_3b_2b_1b_0$)")
+        ax_inl.grid(True, alpha=0.3)
+        ax_inl.axhline(y=0, color='black', linestyle='--', linewidth=0.5, alpha=0.5)
+        
+        ax_dnl.legend(bbox_to_anchor=(1.01, 1), loc='upper left', fontsize='xx-small')
+        plt.tight_layout()
+        
+        save_path = self._get_save_path(filename, "MC_Linearity", f"mc_all_iterations_lsb{lsb_ns}ns")
         plt.savefig(save_path)
         plt.close()
+        print(f"Saved: {save_path}")
 
     def plot_linearity(self, filename, signal_name=None):
+        """Plot DNL and INL with publication-ready styling."""
         df, path = self.load_data(filename)
         if df is None: return
         
@@ -217,7 +558,15 @@ class CadencePlotter:
         if signal_name is None:
             signal_name = df.columns[0].split(' (')[0].split(' ')[0]
 
-        plot_df = self._reconstruct_digital_data(df, filename, signal_name, bit_count)
+        # Check if this is MC code sweep format
+        has_bit_cols = all(f'd{i}' in df.columns for i in range(bit_count))
+        has_x_y_cols = any(c.endswith(' X') or c.endswith('X') for c in df.columns)
+        
+        if has_bit_cols and not has_x_y_cols:
+            plot_df = self._reconstruct_mc_code_sweep(df, filename, bit_count)
+        else:
+            plot_df = self._reconstruct_digital_data(df, filename, signal_name, bit_count)
+        
         if plot_df is None: return
 
         y = plot_df['y'].values
@@ -225,20 +574,129 @@ class CadencePlotter:
         dnl = np.insert(np.diff(y) / lsb_ideal - 1, 0, 0)
         inl = np.cumsum(dnl)
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
-        ax1.plot(plot_df['label'], dnl, marker='o', color='blue', markersize=4)
-        ax1.set_ylabel("DNL (LSB)")
-        ax1.set_title(f"{bit_count}-Bit Linearity: {signal_name} (LSB={lsb_ideal:.2e})")
+        # Create figure with improved styling
+        fig, (ax1, ax2) = self._create_figure(nrows=2, ncols=1, figsize=(11, 9), sharex=True)
         
-        ax2.plot(plot_df['label'], inl, marker='o', color='crimson', markersize=4)
-        ax2.set_ylabel("INL (LSB)")
-        plt.xticks(rotation=90, fontsize=8)
+        # DNL plot
+        ax1.plot(plot_df['label'], dnl, marker='o', color=self.colors['secondary'], 
+                 linewidth=2.5, markersize=5, label='DNL')
+        ax1.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
+        ax1.axhline(y=1, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        ax1.axhline(y=-1, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        self._format_plot_labels(ax1, ylabel='DNL (LSB)', 
+                                title=f"{bit_count}-Bit Linearity Analysis: {signal_name}")
+        self._apply_grid_styling(ax1)
+        ax1.legend(fontsize=10, loc='upper right')
+        
+        # INL plot
+        ax2.plot(plot_df['label'], inl, marker='o', color=self.colors['primary'], 
+                 linewidth=2.5, markersize=5, label='INL')
+        ax2.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
+        self._format_plot_labels(ax2, xlabel=f'Digital Code (LSB={lsb_ideal:.2e})', 
+                                ylabel='INL (LSB)')
+        self._apply_grid_styling(ax2)
+        ax2.legend(fontsize=10, loc='upper right')
+        
+        # Rotate x-axis labels for readability
+        ax2.tick_params(axis='x', rotation=45)
+        
         plt.tight_layout()
-
         save_path = self._get_save_path(filename, signal_name, "linearity")
-        plt.savefig(save_path)
+        self._save_figure(fig, save_path)
 
-        plt.close()
+    def plot_direct_csv_sweep(self, filename, y_col_idx=1, remove_code=True):
+        """
+        Plot delay/power vs code for direct CSV files (X, Y columns).
+        Code is the row index (0-based).
+        Generates both sweep and linearity (DNL/INL) plots with publication-ready styling.
+        
+        Args:
+            filename: CSV filename with X and Y columns
+            y_col_idx: Which column to use as Y data (default: 1 for second column)
+            remove_code: If True, remove code at len(df)//2 + 1
+        """
+        df, path = self.load_data(filename)
+        if df is None: 
+            return
+        
+        # Load and preprocess data
+        y_data = pd.to_numeric(df.iloc[:, y_col_idx], errors='coerce').dropna()
+        original_length = len(y_data)
+        codes_to_remove = original_length // 2 + 1
+        
+        # Remove middle code and re-index
+        if remove_code and codes_to_remove < original_length:
+            mask = np.arange(original_length) != codes_to_remove
+            y_data = y_data[mask].reset_index(drop=True)
+        
+        codes = np.arange(len(y_data))
+        metric_info = self._get_metric_info(path.stem)
+        y_to_plot = (y_data.values - y_data.values[0]) * metric_info['scale']
+        
+        # Create sparse tick labels
+        num_codes = len(codes)
+        step = max(1, num_codes // 10)
+        tick_positions = np.arange(0, num_codes, step)
+        tick_labels = [str(int(c)) for c in codes[tick_positions]]
+        
+        # ===== PLOT 1: Sweep =====
+        fig1, ax1 = self._create_figure(figsize=(11, 6))
+        ax1.plot(codes, y_to_plot, marker='o', color=self.colors['primary'], 
+                 linewidth=2.5, markersize=4, label='Measured')
+        
+        self._format_plot_labels(ax1, 
+                                xlabel='Digital Code',
+                                ylabel=f"Relative {metric_info['name']} ({metric_info['prefix']}{metric_info['unit']})",
+                                title=f"{path.stem.replace('_', ' ').title()} - Sweep"
+        )
+        ax1.set_xticks(tick_positions)
+        ax1.set_xticklabels(tick_labels)
+        ax1.legend(fontsize=10)
+        self._apply_grid_styling(ax1)
+        
+        plt.tight_layout()
+        save_path1 = self._get_save_path(filename, metric_info['name'], "sweep_decimal")
+        self._save_figure(fig1, save_path1)
+        
+        # ===== PLOT 2: DNL and INL =====
+        y = y_data.values
+        lsb_ideal = (y[-1] - y[0]) / (len(y) - 1) if len(y) > 1 else 1e-9
+        dnl = np.insert(np.diff(y) / lsb_ideal - 1, 0, 0)
+        inl = np.cumsum(dnl)
+        
+        fig2, (ax2, ax3) = self._create_figure(nrows=2, ncols=1, figsize=(11, 9), sharex=True)
+        
+        # DNL plot
+        ax2.plot(codes, dnl, marker='o', color=self.colors['secondary'], 
+                linewidth=2.5, markersize=4, label='DNL')
+        ax2.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
+        ax2.axhline(y=1, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        ax2.axhline(y=-1, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        self._format_plot_labels(ax2, 
+                                ylabel='DNL (LSB)',
+                                title=f"Differential Non-Linearity (LSB={lsb_ideal:.2e})"
+        )
+        ax2.legend(fontsize=10)
+        self._apply_grid_styling(ax2)
+        
+        # INL plot
+        ax3.plot(codes, inl, marker='o', color=self.colors['primary'], 
+                linewidth=2.5, markersize=4, label='INL')
+        ax3.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
+        self._format_plot_labels(ax3, 
+                                xlabel='Digital Code',
+                                ylabel='INL (LSB)',
+                                title='Integral Non-Linearity'
+        )
+        ax3.set_xticks(tick_positions)
+        ax3.set_xticklabels(tick_labels)
+        ax3.legend(fontsize=10)
+        self._apply_grid_styling(ax3)
+        
+        plt.tight_layout()
+        save_path2 = self._get_save_path(filename, metric_info['name'], "linearity_decimal")
+        self._save_figure(fig2, save_path2)
+
 
     def plot_histogram(self, filenames):
         """
@@ -295,7 +753,7 @@ class CadencePlotter:
             ax.axvline(mean - std, color='orange', linestyle='--')
             ax.axvspan(mean - std, mean + std, color='orange', alpha=0.1)
             
-            ax.set_title(f"Monte Carlo: {label}\n($\mu$={mean:.3e}, $\sigma$={std:.3e})")
+            ax.set_title(rf"Monte Carlo: {label}\n($\mu$={mean:.3e}, $\sigma$={std:.3e})")
             ax.set_xlabel(label)
             ax.set_ylabel("Frequency")
             ax.legend()
@@ -319,7 +777,7 @@ class CadencePlotter:
                 match = corner_pattern.search(x_col)
                 label = match.group(1).upper() if match else x_col
                 plt.plot(df[x_col], df[y_col], marker='o', label=label)
-        plt.xlabel("Temperature [$^{\circ}$C]"); plt.ylabel(path.stem.split('_')[0].capitalize())
+        plt.xlabel(r"Temperature [$^{\circ}$C]"); plt.ylabel(path.stem.split('_')[0].capitalize())
         plt.title(f"Corner Sweep: {path.name}")
         plt.legend(title="Corners"); plt.grid(True); plt.tight_layout()
 
@@ -629,59 +1087,190 @@ class CadencePlotter:
         return self.plot_generic_sweep(filename)
 
 
+# ============================================================================
+# PLOT CONFIGURATION & EXECUTION
+# ============================================================================
+
+def define_plot_tasks():
+    """Define all plotting tasks in a structured format."""
+    return {
+        "constant_slope_sweeps": {
+            "description": "Constant slope automatic sweeps",
+            "files": [
+                "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv", 
+                "cs_delay_code_5bit_nonidealcurs.csv", "cs_delay_code_5bit_coarse.csv",
+                "cs_power_code_4bit.csv", "cs_power_code_5bit.csv", 
+                "cs_power_code_5bit_nonidealcurs.csv", "cs_power_code_5bit_coarse.csv",
+                "cs_delay_mc_tt_00000.csv", "cs_power_mc_tt_00000.csv", 
+                "cs_delay_mc_tt_11111.csv", "cs_power_mc_tt_11111.csv",  
+                "cs_delay_mc_tt_10000.csv", "cs_power_mc_tt_10000.csv",
+            ],
+            "action": lambda plotter, f: plotter.smart_plot(f)
+        },
+        "constant_slope_direct_csv": {
+            "description": "Constant slope direct CSV sweeps with decimal codes",
+            "files": ["cs_delay_code_5bit_counter.csv"],
+            "action": lambda plotter, f: plotter.plot_direct_csv_sweep(f, y_col_idx=1, remove_code=True)
+        },
+        "constant_slope_linearity": {
+            "description": "Constant slope linearity (DNL/INL) analysis",
+            "files": [
+                "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv",
+                "cs_delay_code_5bit_coarse.csv", "cs_delay_code_5bit_nonidealcurs.csv",
+                "cs_delay_code_5bit_counter.csv"
+            ],
+            "action": lambda plotter, f: plotter.plot_linearity(f)
+        },
+        "constant_slope_mc_linearity": {
+            "description": "Constant slope MC linearity per iteration",
+            "files": ["cs_delay_code_5bit_mc.csv"],
+            "action": lambda plotter, f: plotter.plot_mc_linearity_per_iteration(f, max_iterations=20)
+        },
+        "constant_slope_transients_4bit": {
+            "description": "Constant slope 4-bit transient signals",
+            "files": ["cs_Pinst_code_4bit.csv", "cs_signals_code_4bit.csv"],
+            "configs": [
+                {
+                    "file": "cs_Pinst_code_4bit.csv",
+                    "filters": ["d0=0,d1=0,d2=0,d3=0", "d0=0,d1=0,d2=0,d3=1", 
+                                "d0=1,d1=1,d2=1,d3=0", "d0=1,d1=1,d2=1,d3=1"],
+                    "t_range": (40e-9, 100e-9)
+                },
+                {
+                    "file": "cs_signals_code_4bit.csv",
+                    "filters": ["d0=0,d1=0,d2=0,d3=0", "d0=0,d1=0,d2=0,d3=1", 
+                                "d0=1,d1=1,d2=1,d3=0", "d0=1,d1=1,d2=1,d3=1"],
+                    "t_range": (40e-9, 100e-9)
+                }
+            ],
+            "action": lambda plotter, f, config: plotter.plot_signals(config["file"], filters=config["filters"], t_range=config["t_range"], subplots=True)
+        },
+        "constant_slope_transients_5bit": {
+            "description": "Constant slope 5-bit transient signals",
+            "files": ["cs_Pinst_code_5bit.csv", "cs_signals_code_5bit.csv"],
+            "configs": [
+                {
+                    "file": "cs_Pinst_code_5bit.csv",
+                    "filters": ["d0=0,d1=0,d2=0,d3=0,d4=0", "d0=0,d1=0,d2=0,d3=1,d4=1", 
+                                "d0=0,d1=0,d2=0,d3=0,d4=1", "d0=1,d1=1,d2=1,d3=0,d4=0", 
+                                "d0=1,d1=1,d2=1,d3=1,d4=0"],
+                    "t_range": (40e-9, 120e-9)
+                },
+                {
+                    "file": "cs_signals_code_5bit.csv",
+                    "filters": ["d0=0,d1=0,d2=0,d3=0,d4=0", "d0=0,d1=0,d2=0,d3=1,d4=1", 
+                                "d0=0,d1=0,d2=0,d3=0,d4=1", "d0=1,d1=1,d2=1,d3=0,d4=0", 
+                                "d0=1,d1=1,d2=1,d3=1,d4=0"],
+                    "t_range": (40e-9, 120e-9)
+                }
+            ],
+            "action": lambda plotter, f, config: plotter.plot_signals(config["file"], filters=config["filters"], t_range=config["t_range"], subplots=True)
+        },
+        "constant_slope_pvt": {
+            "description": "Constant slope PVT analysis",
+            "files": ["cs_delay_power_corner_T.csv", "cs_delay_power_VDD_corner_T.csv"],
+            "custom": True  # Handled specially
+        },
+        "constant_slope_digital_sweep_mc": {
+            "description": "Constant slope digital sweep MC all iterations",
+            "files": ["cs_delay_code_5bit_mc.csv"],
+            "action": lambda plotter, f: plotter.plot_digital_sweep(f, max_iterations=20)
+        },
+        "constant_slope_histogram": {
+            "description": "Constant slope DR/Resolution histogram",
+            "files": ["cs_delay_mc_tt_00000.csv", "cs_delay_mc_tt_11111.csv"],
+            "custom": True  # Handled specially
+        },
+        "variable_slope_sweeps": {
+            "description": "Variable slope automatic sweeps",
+            "files": ["dlcsi_delay_code_5bit.csv", "dlcsi_power_code_5bit.csv"],
+            "action": lambda plotter, f: plotter.smart_plot(f)
+        },
+        "variable_slope_linearity": {
+            "description": "Variable slope linearity analysis",
+            "files": ["dlcsi_delay_code_5bit.csv"],
+            "action": lambda plotter, f: plotter.plot_linearity(f)
+        },
+        "phase_interpolator_sweeps": {
+            "description": "Phase interpolator automatic sweeps",
+            "files": ["pi_delay_code_4bit.csv", "pi_power_code_4bit.csv"],
+            "action": lambda plotter, f: plotter.smart_plot(f)
+        },
+        "phase_interpolator_linearity": {
+            "description": "Phase interpolator linearity analysis",
+            "files": ["pi_delay_code_4bit.csv"],
+            "action": lambda plotter, f: plotter.plot_linearity(f)
+        }
+    }
+
+
+def run_plots(plotter, plot_all=True, selected_tasks=None):
+    """
+    Run plotting tasks with flexible options.
+    
+    Args:
+        plotter: CadencePlotter instance
+        plot_all: If True, run all tasks. If False, use selected_tasks
+        selected_tasks: List of task names to run (e.g., ["constant_slope_sweeps", "constant_slope_linearity"])
+    """
+    tasks = define_plot_tasks()
+    
+    if plot_all:
+        tasks_to_run = tasks.items()
+    elif selected_tasks:
+        tasks_to_run = [(name, tasks[name]) for name in selected_tasks if name in tasks]
+    else:
+        print("No tasks selected. Use plot_all=True or specify selected_tasks.")
+        return
+    
+    for task_name, task_config in tasks_to_run:
+        print(f"\n{'='*70}")
+        print(f"Running: {task_name}")
+        print(f"Description: {task_config['description']}")
+        print(f"{'='*70}")
+        
+        try:
+            if task_config.get("custom"):
+                # Handle custom tasks
+                if task_name == "constant_slope_pvt":
+                    plotter.plot_pvt_sweep("cs_delay_power_corner_T.csv", subfigure=False)
+                    plotter.plot_pvt_sweep("cs_delay_power_VDD_corner_T.csv", VDD=True, subfigure=True)
+                    plotter.plot_pvt_linearity("cs_delay_power_corner_T.csv", subplots=False)
+                elif task_name == "constant_slope_histogram":
+                    plotter.plot_histogram(["cs_delay_mc_tt_00000.csv", "cs_delay_mc_tt_11111.csv"])
+            
+            elif "configs" in task_config:
+                # Handle tasks with custom configurations
+                for config in task_config["configs"]:
+                    plotter.plot_signals(config["file"], filters=config["filters"], 
+                                       t_range=config["t_range"], subplots=True)
+            
+            else:
+                # Handle standard tasks
+                action = task_config["action"]
+                for file in task_config["files"]:
+                    try:
+                        action(plotter, file)
+                    except Exception as e:
+                        print(f"  Error processing {file}: {str(e)}")
+            
+            print(f"[OK] {task_name} completed")
+        
+        except Exception as e:
+            print(f"[ERROR] {task_name} failed: {str(e)}")
+
+
 # --- Usage ---
-plotter = CadencePlotter(base_dir="results_cadence")
-
-# 1. Automatic Plots (Only for sweeps)
-files = [
-    "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv", "cs_delay_code_5bit_nonidealcurs.csv", "cs_power_code_4bit.csv", "cs_power_code_5bit.csv", "cs_delay_code_5bit_coarse.csv", "cs_power_code_5bit_nonidealcurs.csv", "cs_power_code_5bit_coarse.csv",
-    "cs_delay_mc_tt_00000.csv", "cs_power_mc_tt_00000.csv", "cs_delay_mc_tt_11111.csv", "cs_power_mc_tt_11111.csv",  "cs_delay_mc_tt_10000.csv", "cs_power_mc_tt_10000.csv"]
-for f in files:
-    plotter.smart_plot(f)
-
-# 2. plot transients
-plotter.plot_signals("cs_Pinst_code_4bit.csv", filters=["d0=0,d1=0,d2=0,d3=0", "d0=0,d1=0,d2=0,d3=1",  "d0=1,d1=1,d2=1,d3=0", "d0=1,d1=1,d2=1,d3=1"], t_range=(40e-9,100e-9), subplots=True)
-plotter.plot_signals("cs_signals_code_4bit.csv", filters=["d0=0,d1=0,d2=0,d3=0", "d0=0,d1=0,d2=0,d3=1", "d0=1,d1=1,d2=1,d3=0", "d0=1,d1=1,d2=1,d3=1"], t_range=(40e-9,100e-9), subplots=True)
-plotter.plot_signals("cs_Pinst_code_5bit.csv", filters=["d0=0,d1=0,d2=0,d3=0,d4=0", "d0=0,d1=0,d2=0,d3=1,d4=1", "d0=0,d1=0,d2=0,d3=0,d4=1", "d0=1,d1=1,d2=1,d3=0,d4=0", "d0=1,d1=1,d2=1,d3=1,d4=0"], t_range=(40e-9,120e-9), subplots=True)
-plotter.plot_signals("cs_signals_code_5bit.csv",filters=["d0=0,d1=0,d2=0,d3=0,d4=0", "d0=0,d1=0,d2=0,d3=1,d4=1", "d0=0,d1=0,d2=0,d3=0,d4=1", "d0=1,d1=1,d2=1,d3=0,d4=0", "d0=1,d1=1,d2=1,d3=1,d4=0"], t_range=(40e-9,120e-9), subplots=True )
-
-# 3. plot lineartity
-plotter.plot_linearity("cs_delay_code_4bit.csv")
-plotter.plot_linearity("cs_delay_code_5bit.csv")
-plotter.plot_linearity("cs_delay_code_5bit_coarse.csv")
-plotter.plot_linearity("cs_delay_code_5bit_nonidealcurs.csv")
-
-# 4. PVT analysis 
-plotter.plot_pvt_sweep("cs_delay_power_corner_T.csv", subfigure=False)
-plotter.plot_pvt_sweep("cs_delay_power_VDD_corner_T.csv", VDD=True, subfigure=True)
-plotter.plot_pvt_linearity("cs_delay_power_corner_T.csv", subplots= False)
-
-
-#5. plot histogram for resolution and dynamic range
-plotter.plot_histogram(["cs_delay_mc_tt_00000.csv", "cs_delay_mc_tt_11111.csv"])
-
-# Same for variable slope
-# 1. Automatic Plots (Only for sweeps)
-files = [
-    "dlcsi_delay_code_5bit.csv", "dlcsi_power_code_5bit.csv"]
-for f in files:
-    plotter.smart_plot(f)
-
-# 2. plot transients
-
-
-# 3. plot lineartity
-plotter.plot_linearity("dlcsi_delay_code_5bit.csv")
-
-# Same for variable slope
-# 1. Automatic Plots (Only for sweeps)
-files = [
-    "pi_delay_code_4bit.csv", "pi_power_code_4bit.csv"]
-for f in files:
-    plotter.smart_plot(f)
-
-# 2. plot transients
-
-
-# 3. plot lineartity
-plotter.plot_linearity("pi_delay_code_4bit.csv")
+if __name__ == "__main__":
+    plotter = CadencePlotter(base_dir="results_cadence")
+    
+    # Option 1: Plot everything
+    run_plots(plotter, plot_all=True)
+    
+    # Option 2: Plot only specific tasks (uncomment to use)
+    # selected = [
+    #     "constant_slope_sweeps",
+    #     "constant_slope_linearity",
+    #     "constant_slope_direct_csv"
+    # ]
+    # run_plots(plotter, plot_all=False, selected_tasks=selected)

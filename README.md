@@ -20,5 +20,5 @@ The plotter automatically extracts the X-axis title from the filename:
 
 ## Key Logic
 - **Sanitization**: All signal names (e.g., `/out_DTC`) are converted to safe filenames.
-- **Redundancy**: Specifically checks **Code 16** against **Code 0**; if identical, Code 16 is removed to ensure clean linearity plots.
+- **Redundancy**: Specifically checks **Code 16** against **Code 15**; if identical, Code 16 is removed to ensure clean linearity plots.
 - **5-bit Mode**: Automatically applies $d_4 = \text{NOT}(X)$ if the file is tagged as `5bit`.
