@@ -35,7 +35,15 @@ for j in range(n-1):
         C_array[j] = ideal_value + mismatch
 
 Ca = np.sum(C_array)
-C0= 338*Cu
+#C0= 338*Cu #fF, the reference capacitor, which can also be mismatched
+C0= Ca*8/3 #fF, the reference capacitor, which can also be mismatched
+# for j in range(337):
+#     ideal_value = Cu
+#     if RUN["DAC_mismatch"] :
+#         mismatch =  np.random.randn() * sigma_c
+#     else:
+#         mismatch = 0
+#     C0 += ideal_value + mismatch
 
 Vdd = 1.1 #V
 
