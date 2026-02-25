@@ -613,6 +613,86 @@ class CadencePlotter:
         save_path = self._get_save_path(filename, "MC_Linearity", f"mcparamset_linearity_{len(sweeps)}")
         self._save_figure(fig, save_path)
 
+    def plot_average_power_by_code(self, filename, start_time=2e-8, window_size=5e-8, num_codes=256):
+        """Plot average power consumption by digital code, removing the code with maximum power.
+        
+        Uses sliding window analysis to calculate average power for each code, then removes
+        the code with the highest power (peak detection).
+        
+        Args:
+            filename: CSV file with transient power data (Time, Power columns)
+            start_time: Start time for the analysis window (default: 2e-8 s)
+            window_size: Duration of each code's time window (default: 5e-8 s)
+            num_codes: Total number of codes to process (default: 256)
+        """
+        df, path = self.load_data(filename)
+        if df is None:
+            return
+
+        # Identify time and power columns
+        time_col = df.columns[0]
+        power_col = df.columns[1]
+        df = df.rename(columns={time_col: 'Time', power_col: 'Power'})
+        
+        # Calculate average power for each code using windowed integration
+        all_averages = []
+        all_codes = []
+        
+        for i in range(num_codes):
+            t_start = start_time + i * window_size
+            t_end = start_time + (i + 1) * window_size
+            
+            mask = (df['Time'] >= t_start) & (df['Time'] < t_end)
+            window_data = df[mask]
+            
+            if not window_data.empty:
+                times = window_data['Time'].values
+                powers = window_data['Power'].values
+                # Trapezoidal integration: sum of (dx * (y[i] + y[i+1])/2)
+                energy = np.sum((times[1:] - times[:-1]) * (powers[1:] + powers[:-1]) / 2.0)
+                actual_duration = times[-1] - times[0]
+                avg_p = energy / actual_duration if actual_duration > 0 else window_data['Power'].mean()
+            else:
+                avg_p = 0
+            
+            all_averages.append(avg_p)
+            all_codes.append(i)
+        
+        # Find and identify the code with maximum power
+        max_idx = np.argmax(all_averages)
+        max_code = all_codes[max_idx]
+        
+        # Filter out the max power code
+        plot_codes = []
+        plot_averages = []
+        for i in range(num_codes):
+            if i != max_code:
+                plot_codes.append(all_codes[i])
+                plot_averages.append(all_averages[i])
+        
+        # Create publication-ready plot
+        fig, ax = self._create_figure(figsize=(12, 7))
+        
+        ax.plot(plot_codes, np.array(plot_averages) * 1e6, color=self.colors['primary'], 
+                linewidth=2.6, marker=None, label=f"Average Power (Code {max_code} removed)")
+        
+        thesis_title = self._get_thesis_title(filename, "sweep")
+        clean_title = self._format_title(thesis_title)
+        
+        self._format_plot_labels(
+            ax,
+            xlabel="Digital Code",
+            ylabel="Average Power (µW)",
+            title=clean_title
+        )
+        
+        ax.legend(fontsize=11, loc='best', framealpha=0.95)
+        self._apply_grid_styling(ax, alpha=0.35)
+        
+        plt.tight_layout()
+        save_path = self._get_save_path(filename, "Avg_Power", "avg_power_by_code")
+        self._save_figure(fig, save_path)
+
     def plot_digital_sweep(self, filename, signal_name=None, max_iterations=200):
         """Plot digital code sweeps with improved styling and metrics."""
         df, path = self.load_data(filename)
@@ -1207,6 +1287,167 @@ class CadencePlotter:
         save_path = self._get_save_path(filename, path.name ,"corner_T")
         self._save_figure(fig, save_path)
 
+    def plot_corner_linearity_xy(self, filename):
+        """Plot DNL/INL across corners from alternating X/Y columns with labels in row 0."""
+        path = self.base_dir / filename
+        if not path.exists():
+            print(f"Warning: File {filename} not found.")
+            return
+
+        raw = pd.read_csv(path, header=0)
+        if raw.shape[0] < 1 or raw.shape[1] < 2:
+            print(f"Warning: File {filename} has insufficient data.")
+            return
+
+        labels = raw.columns.tolist()
+        data = raw.reset_index(drop=True)
+
+        corners = ["SS", "TT", "FF"]
+        fig = {}
+        ax_dnl = {}
+        ax_inl = {}
+        fig_sweep = {}
+        ax_sweep = {}
+
+        for corner in corners:
+            fig[corner], (ax_dnl[corner], ax_inl[corner]) = plt.subplots(2, 1, figsize=(11, 10))
+            fig[corner].patch.set_facecolor('white')
+            fig[corner].patch.set_alpha(1.0)
+            
+            fig_sweep[corner], ax_sweep[corner] = self._create_figure(figsize=(11, 6))
+
+        color_cycle = [
+            self.colors['primary'], self.colors['secondary'], self.colors['tertiary'],
+            self.colors['quaternary'], self.colors['accent'], self.colors['neutral']
+        ]
+        corner_color_idx = {corner: 0 for corner in corners}
+
+        # Maps for Vdd-to-color and temperature-to-linestyle
+        vdd_color_map = {}
+        temp_linestyle_map = {
+            -55: '-',      # solid line
+            0: '--',       # dashed line
+            27: ':',       # dotted line
+        }
+
+        def extract_params(label_str):
+            """Extract corner, temperature, and Vdd from label string."""
+            corner = None
+            temp = None
+            vdd = None
+
+            label_lower = str(label_str).lower()
+
+            # Extract corner from top_xx pattern (SS, TT, FF)
+            corner_match = re.search(r'top_(ss|tt|ff)', label_lower)
+            if corner_match:
+                corner = corner_match.group(1).upper()
+
+            # Extract temperature (temperature=-55 or T=-55)
+            temp_match = re.search(r'temperature=(-?\d+(?:\.\d+)?)', label_lower)
+            if temp_match:
+                temp = int(float(temp_match.group(1)))
+
+            # Extract Vdd (Vdd=0.88)
+            vdd_match = re.search(r'vdd=(\d+(?:\.\d+)?)', label_lower)
+            if vdd_match:
+                vdd = float(vdd_match.group(1))
+
+            return corner, temp, vdd
+
+        for col in range(0, data.shape[1] - 1, 2):
+            x = pd.to_numeric(data.iloc[:, col], errors='coerce')
+            y = pd.to_numeric(data.iloc[:, col + 1], errors='coerce')
+            mask = x.notna() & y.notna()
+            if not mask.any():
+                continue
+
+            x_vals = x[mask].values
+            y_vals = y[mask].values
+            if len(y_vals) < 2:
+                continue
+
+            # Remove element 128 (index 127)
+            if len(y_vals) > 128:
+                x_vals = np.delete(x_vals, 128)
+                y_vals = np.delete(y_vals, 128)
+
+            label = labels[col + 1] if col + 1 < len(labels) else ""
+            corner, temp, vdd = extract_params(label)
+            if corner is None:
+                continue
+
+            # Assign color based on Vdd (same color for same voltage across all curves)
+            if vdd not in vdd_color_map:
+                vdd_color_map[vdd] = color_cycle[len(vdd_color_map) % len(color_cycle)]
+            color = vdd_color_map[vdd]
+
+            # Get linestyle based on temperature
+            linestyle = temp_linestyle_map.get(temp, '-')
+
+            # Build legend label
+            legend_parts = []
+            if temp is not None:
+                legend_parts.append(f"T={temp}°C")
+            if vdd is not None:
+                legend_parts.append(f"Vdd={vdd}V")
+            legend_label = ", ".join(legend_parts) if legend_parts else str(label)
+
+            # Compute DNL and INL from delay data
+            lsb_ideal = (y_vals[-1] - y_vals[0]) / (len(y_vals) - 1)
+            if lsb_ideal == 0 or np.isnan(lsb_ideal):
+                continue
+            
+            dnl = np.diff(y_vals) / lsb_ideal - 1
+            inl = np.cumsum(dnl)
+            codes = np.arange(1, len(y_vals))
+
+            # Plot DNL and INL on respective subplots
+            ax_dnl[corner].plot(codes, dnl, label=legend_label, color=color, linestyle=linestyle, linewidth=2.0, alpha=0.9)
+            ax_inl[corner].plot(codes, inl, label=legend_label, color=color, linestyle=linestyle, linewidth=2.0, alpha=0.9)
+            
+            # Plot sweep (digital code vs output delay)
+            ax_sweep[corner].plot(codes, y_vals[1:], label=legend_label, color=color, linestyle=linestyle, linewidth=2.4, alpha=0.9)
+
+        thesis_title = self._get_thesis_title(filename, "linearity")
+        clean_title = self._format_title(thesis_title)
+
+        for corner in corners:
+            if len(ax_dnl[corner].lines) == 0:
+                continue
+
+            # Format DNL subplot (top)
+            ax_dnl[corner].set_title(f"{clean_title} - DNL ({corner})", fontsize=14, fontweight='bold')
+            ax_dnl[corner].set_xlabel("Digital Code", fontsize=12, fontweight='bold')
+            ax_dnl[corner].set_ylabel("DNL (LSB)", fontsize=12, fontweight='bold')
+            self._apply_grid_styling(ax_dnl[corner], alpha=0.35)
+            ax_dnl[corner].axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
+            ax_dnl[corner].set_ylim(-1, 1)
+            ax_dnl[corner].legend(fontsize=9, framealpha=0.95, loc='best')
+
+            # Format INL subplot (bottom)
+            ax_inl[corner].set_title(f"{clean_title} - INL ({corner})", fontsize=14, fontweight='bold')
+            ax_inl[corner].set_xlabel("Digital Code", fontsize=12, fontweight='bold')
+            ax_inl[corner].set_ylabel("INL (LSB)", fontsize=12, fontweight='bold')
+            self._apply_grid_styling(ax_inl[corner], alpha=0.35)
+            ax_inl[corner].axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
+            ax_inl[corner].legend(fontsize=9, framealpha=0.95, loc='best')
+
+            plt.tight_layout()
+            save_path = self._get_save_path(filename, "Linearity", f"corner_dnl_inl_{corner.lower()}")
+            self._save_figure(fig[corner], save_path)
+            
+            # Format and save sweep plot
+            ax_sweep[corner].set_title(f"Sweep Plot - Code vs Output Delay ({corner})", fontsize=14, fontweight='bold')
+            ax_sweep[corner].set_xlabel("Digital Code", fontsize=12, fontweight='bold')
+            ax_sweep[corner].set_ylabel("Output Delay (s)", fontsize=12, fontweight='bold')
+            self._apply_grid_styling(ax_sweep[corner], alpha=0.35)
+            ax_sweep[corner].legend(fontsize=9, framealpha=0.95, loc='best')
+            
+            plt.tight_layout()
+            save_path_sweep = self._get_save_path(filename, "Linearity", f"corner_sweep_{corner.lower()}")
+            self._save_figure(fig_sweep[corner], save_path_sweep)
+
     def plot_generic_sweep(self, filename):
         """Format: Single X and Y pair."""
         df, path = self.load_data(filename)
@@ -1542,7 +1783,7 @@ def define_plot_tasks():
         "constant_slope_sweeps": {
             "description": "Constant slope automatic sweeps",
             "files": [
-                "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv", 
+                "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv", "cs_delay_code_8bit.csv",
                 "cs_delay_code_5bit_nonidealcurs.csv", "cs_delay_code_5bit_coarse.csv",
                 "cs_power_code_4bit.csv", "cs_power_code_5bit.csv", 
                 "cs_power_code_5bit_nonidealcurs.csv", "cs_power_code_5bit_coarse.csv",
@@ -1560,7 +1801,7 @@ def define_plot_tasks():
         "constant_slope_linearity": {
             "description": "Constant slope linearity (DNL/INL) analysis",
             "files": [
-                "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv",
+                "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv", "cs_delay_code_8bit.csv",
                 "cs_delay_code_5bit_coarse.csv", "cs_delay_code_5bit_nonidealcurs.csv",
                 "cs_delay_code_5bit_counter.csv"
             ],
@@ -1568,7 +1809,7 @@ def define_plot_tasks():
         },
         "constant_slope_mc_linearity": {
             "description": "Constant slope MC linearity per iteration",
-            "files": ["cs_delay_code_8bit_counter_mc.csv"],
+            "files": ["cs_delay_code_8bit_counter_mc.csv", "cs_delay_code_8bit_mc.csv"],
             "action": lambda plotter, f: plotter.plot_mc_linearity_all_realizations_xy(f, max_realizations=200)
         },
         "constant_slope_transients_4bit": {
@@ -1616,9 +1857,14 @@ def define_plot_tasks():
             "files": ["cs_delay_power_corner_T.csv", "cs_delay_power_VDD_corner_T.csv"],
             "custom": True  # Handled specially
         },
+        "constant_slope_corner_linearity": {
+            "description": "Constant slope corner DNL/INL and sweep",
+            "files": ["cs_delay_code_8bit_corner.csv"],
+            "action": lambda plotter, f: plotter.plot_corner_linearity_xy(f)
+        },
         "constant_slope_digital_sweep_mc": {
             "description": "Constant slope digital sweep MC all iterations",
-            "files": ["cs_delay_code_8bit_counter_mc.csv"],
+            "files": ["cs_delay_code_8bit_counter_mc.csv", "cs_delay_code_8bit_mc.csv"],
             "action": lambda plotter, f: plotter.plot_mc_sweep_all_realizations(f, max_realizations=200)
         },
         "constant_slope_mcparamset": {
@@ -1626,6 +1872,11 @@ def define_plot_tasks():
             "files": ["cs_delay_8bit_mc_idcursrc.csv"],
             "action": lambda plotter, f: (plotter.plot_mcparamset_sweep(f, max_realizations=200),
                                            plotter.plot_mcparamset_linearity(f, max_realizations=200))
+        },
+        "constant_slope_avg_power": {
+            "description": "Constant slope average power analysis by code",
+            "files": ["cs_Pinst_code_8bit.csv"],
+            "action": lambda plotter, f: plotter.plot_average_power_by_code(f)
         },
         "constant_slope_histogram": {
             "description": "Constant slope DR/Resolution histogram",
@@ -1720,9 +1971,8 @@ if __name__ == "__main__":
     print("PLOTTING MC SIMULATIONS (200 Realizations)")
     print("="*70)
     
-    run_plots(plotter, plot_all=False, selected_tasks=['constant_slope_mc_linearity'])
-    run_plots(plotter, plot_all=False, selected_tasks=['constant_slope_digital_sweep_mc'])
-    
+    run_plots(plotter, plot_all=False, selected_tasks=["constant_slope_avg_power"])
+    plotter.plot_direct_csv_sweep("cs_delay_code_8bit.csv", y_col_idx=1, remove_code=True)
     print("\n" + "="*70)
     print("All MC plots saved to: plots/constant_slope/")
     print("="*70)

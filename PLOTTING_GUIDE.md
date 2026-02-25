@@ -1,4 +1,4 @@
-# Plot Cadence - Refactored Code Guide
+C:\Users\zipar\MEP_cadence\plot_cadence\Scripts\python.exe -c "from plot_delay import CadencePlotter; p=CadencePlotter(base_dir='results_cadence'); p.plot_mc_sweep_all_realizations('cs_delay_code_8bit_mc.csv', max_realizations=200)"# Plot Cadence - Refactored Code Guide
 
 ## Overview
 The plotting code has been refactored for better organization, maintainability, and flexibility. All original functionalities are preserved.
