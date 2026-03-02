@@ -1,6 +1,7 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
 import os
 from pathlib import Path
 
@@ -76,21 +77,21 @@ def E_msb_1(Ca, C_k, Vdd):
 
 RUN = {
     "DAC_mismatch": True,
-    "CLM": False,
+    "CLM": True,
     "Non-linearities-capacitor": False
 }
 
 #define delay in the DTC by using 
-n = 8 #number of bits
+n = 6 #number of bits
 N = 2**n-1 #max ndigital number
-Cu = 30e-15 #unit capacitance size
+Cu = 2e-15 #unit capacitance size
 
 # Generate mismatched binary capacitors
 C_array = np.zeros(n-1)
 
 #sigmaC/C = Ac/sqrt(A) Pelgrom's law, where A is the area of the capacitor and Ac is a process-dependent constant. Assuming C = Cu, we can express the mismatch as sigmaC/C = Ac/sqrt(Cu). For a given mismatch factor (e.g., 0.003), we can derive Ac as follows:
 Ac = 5.218e-3 #nm, which is a typical value for modern processes
-A = 15 #um^2, which is a typical area for a 30fF capacitor
+A = 1.69 #um^2, which is a typical area for a 30fF capacitor
 
 sigma_c = Ac / np.sqrt(A)*Cu  # Calculate sigmaC based on Pelgrom's law
 
@@ -103,14 +104,16 @@ for j in range(n-1):
         C_array[j] = ideal_value + mismatch
 
 Ca = np.sum(C_array)
-C0= Ca*8/3 #fF, the reference capacitor, which can also be mismatched
+C0= Ca #fF, the reference capacitor, which can also be mismatched
 
 Vdd = 1.1 #V
-f = 20e6 #Hz, operating frequency
+f = 50e6 #Hz, operating frequency
 
-Vth = Vdd/2 #V
-Ich = 300e-9 #A
-Cramp = 5e-15 #F
+Vth = 0.55 #V
+Ich = 1.05e-6 #A
+Cramp = 3e-15 #F
+
+#K_slope = 350 MV/s
 
 # C1 = 5.300001e-07 #1/V
 # C2 = 2.030000e-06 #1/V^2
@@ -504,93 +507,76 @@ def calculate_dnl_inl(ich_val, cramp_val, vst_array_in):
     
     return dnl_clm_s, inl_clm_s, dnl_nonlin_s, inl_nonlin_s, dnl_both_s, inl_both_s
 
-# Parameter combinations
-param_sets_ich = [
-    {"Ich": 1e-9, "Cramp": 5e-15, "label": "I_ch=100nA, C_ramp=5fF"},
-    {"Ich": 300e-9, "Cramp": 5e-15, "label": "I_ch=300nA, C_ramp=5fF"},
-    {"Ich": 1000e-9, "Cramp": 5e-15, "label": "I_ch=500nA, C_ramp=5fF"},
-]
 
-param_sets_cramp = [
-    {"Ich": 300e-9, "Cramp": 1e-18, "label": "I_ch=300nA, C_ramp=1fF"},
-    {"Ich": 300e-9, "Cramp": 5e-15, "label": "I_ch=300nA, C_ramp=5fF"},
-    {"Ich": 300e-9, "Cramp": 1e-12, "label": "I_ch=300nA, C_ramp=10fF"},
-]
+# ===== PARAMETRIC SWEEP: Power sensitivity to C0 =====
+print("\n" + "=" * 60)
+print("Analyzing Power vs C0 Sweep")
+print("=" * 60)
 
-# Figure 1: I_ch sweep (C_ramp = 5 fF fixed)
-fig_ich, axes_ich = plt.subplots(2, 3, figsize=(16, 10), sharex=True)
-for idx, param in enumerate(param_sets_ich):
-    ich_p = param["Ich"]
-    cramp_p = param["Cramp"]
-    label_p = param["label"]
-    
-    dnl_clm, inl_clm, dnl_nl, inl_nl, dnl_both, inl_both = calculate_dnl_inl(ich_p, cramp_p, Vst_array)
-    codes_dnl = np.arange(1, N-1)
-    
-    # DNL subplot (top row)
-    axes_ich[0, idx].plot(codes_dnl, dnl_clm, label='CLM Only', linewidth=2.2, alpha=0.85, color='#D62728')
-    axes_ich[0, idx].plot(codes_dnl, dnl_nl, label='Non-Linearities Only', linewidth=2.2, alpha=0.85, color='#1F77B4')
-    axes_ich[0, idx].plot(codes_dnl, dnl_both, label='CLM + Non-Linearities', linewidth=2.2, alpha=0.85, color='#2CA02C')
-    axes_ich[0, idx].axhline(y=0, color='black', linestyle='-', linewidth=0.8, alpha=0.4)
-    axes_ich[0, idx].set_ylabel("DNL (LSB)", fontsize=11, fontweight='bold')
-    axes_ich[0, idx].set_title(label_p, fontsize=12, fontweight='bold', pad=10)
-    axes_ich[0, idx].grid(True, linestyle='--', alpha=0.6, linewidth=1.0, color="#b7b7b7")
-    axes_ich[0, idx].set_axisbelow(True)
-    if idx == 0:
-        axes_ich[0, idx].legend(fontsize=9, framealpha=0.95, edgecolor='black', loc='best')
-    
-    # INL subplot (bottom row)
-    axes_ich[1, idx].plot(codes_dnl, inl_clm, label='CLM Only', linewidth=2.2, alpha=0.85, color='#D62728')
-    axes_ich[1, idx].plot(codes_dnl, inl_nl, label='Non-Linearities Only', linewidth=2.2, alpha=0.85, color='#1F77B4')
-    axes_ich[1, idx].plot(codes_dnl, inl_both, label='CLM + Non-Linearities', linewidth=2.2, alpha=0.85, color='#2CA02C')
-    axes_ich[1, idx].axhline(y=0, color='black', linestyle='-', linewidth=0.8, alpha=0.4)
-    axes_ich[1, idx].set_ylabel("INL (LSB)", fontsize=11, fontweight='bold')
-    axes_ich[1, idx].set_xlabel("Digital Code", fontsize=11, fontweight='bold')
-    axes_ich[1, idx].grid(True, linestyle='--', alpha=0.6, linewidth=1.0, color="#b7b7b7")
-    axes_ich[1, idx].set_axisbelow(True)
+# Define C0 values to test
+C0_factors = [1, 8/3, 5]  # C0 = Ca, C0 = 8/3*Ca, C0 = 5*Ca
+C0_labels = ['$C_0 = C_a$', '$C_0 = \\frac{8}{3}C_a$', '$C_0 = 5C_a$']
+colors_c0 = ['#D62728', '#1F77B4', '#2CA02C']
 
-fig_ich.suptitle('DNL and INL Sensitivity to Source Current (I_ch) - C_ramp = 5 fF', 
-                  fontsize=14, fontweight='bold', y=1.00)
+# Prepare figure
+fig_c0, ax_c0 = plt.subplots(figsize=(11, 6))
+
+# Regenerate ideal capacitor array for consistency (no mismatch)
+C_array_ideal = np.array([(2**j) * Cu for j in range(n-1)])
+Ca_ideal = np.sum(C_array_ideal)
+
+# For each C0 value
+for idx, (c0_factor, label, color) in enumerate(zip(C0_factors, C0_labels, colors_c0)):
+    C0_test = Ca_ideal * c0_factor
+    
+    # Calculate energy and power for all codes
+    N_full = 2**n
+    E_array_c0 = np.zeros(N_full)
+    
+    for i in range(N_full):
+        # Calculate C_k for this code (7 LSBs)
+        C_k = 0
+        for j in range(n-1):
+            bit = (i >> j) & 1
+            C_k += (1 - bit) * C_array_ideal[j]
+        
+        # MSB determines the mode
+        msb = (i >> (n-1)) & 1
+        
+        # Calculate energy based on MSB
+        if msb == 1:
+            # MSB = 1: E = (Ca-C_k)/(C0+Ca) * (C0+C_k) * Vdd^2
+            E_array_c0[i] = (Ca_ideal - C_k) / (C0_test + Ca_ideal) * (C0_test + C_k) * Vdd**2
+        else:
+            # MSB = 0: E = (C0+(Ca-C_k)) * (C_k/(C0+Ca)) * Vdd^2
+            E_array_c0[i] = (C0_test + (Ca_ideal - C_k)) * (C_k / (C0_test + Ca_ideal)) * Vdd**2
+    
+    # Convert energy to power (multiply by frequency)
+    P_array_c0 = E_array_c0 * f * 1e6  # Convert to µW
+    
+    # Plot
+    codes_full = np.arange(N_full)
+    ax_c0.plot(codes_full, P_array_c0, color=color, linewidth=2.6, 
+               label=label, alpha=0.9)
+    
+    # Print statistics
+    print(f"\n{label}:")
+    print(f"  C0 = {C0_test*1e15:.2f} fF")
+    print(f"  P_min = {np.min(P_array_c0):.3f} µW (code {np.argmin(P_array_c0)})")
+    print(f"  P_max = {np.max(P_array_c0):.3f} µW (code {np.argmax(P_array_c0)})")
+    print(f"  P_avg = {np.mean(P_array_c0):.3f} µW")
+
+ax_c0.set_title('DTC Power Consumption vs Digital Code for Different $C_0$ Values', 
+                fontsize=14, fontweight='bold', pad=12)
+ax_c0.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
+ax_c0.set_ylabel('Power [µW]', fontsize=12, fontweight='bold')
+ax_c0.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
+ax_c0.set_axisbelow(True)
+ax_c0.legend(fontsize=11, framealpha=0.96, edgecolor='black', loc='upper center')
+
 plt.tight_layout()
-save_figure(fig_ich, 'dtc_dnl_inl_ich_sweep.png')
-plt.close(fig_ich)
+save_figure(fig_c0, 'dtc_power_vs_C0_sweep.png')
+plt.close(fig_c0)
 
-# Figure 2: C_ramp sweep (I_ch = 300 nA fixed)
-fig_cramp, axes_cramp = plt.subplots(2, 3, figsize=(16, 10), sharex=True)
-for idx, param in enumerate(param_sets_cramp):
-    ich_p = param["Ich"]
-    cramp_p = param["Cramp"]
-    label_p = param["label"]
-    
-    dnl_clm, inl_clm, dnl_nl, inl_nl, dnl_both, inl_both = calculate_dnl_inl(ich_p, cramp_p, Vst_array)
-    codes_dnl = np.arange(1, N-1)
-    
-    # DNL subplot (top row)
-    axes_cramp[0, idx].plot(codes_dnl, dnl_clm, label='CLM Only', linewidth=2.2, alpha=0.85, color='#D62728')
-    axes_cramp[0, idx].plot(codes_dnl, dnl_nl, label='Non-Linearities Only', linewidth=2.2, alpha=0.85, color='#1F77B4')
-    axes_cramp[0, idx].plot(codes_dnl, dnl_both, label='CLM + Non-Linearities', linewidth=2.2, alpha=0.85, color='#2CA02C')
-    axes_cramp[0, idx].axhline(y=0, color='black', linestyle='-', linewidth=0.8, alpha=0.4)
-    axes_cramp[0, idx].set_ylabel("DNL (LSB)", fontsize=11, fontweight='bold')
-    axes_cramp[0, idx].set_title(label_p, fontsize=12, fontweight='bold', pad=10)
-    axes_cramp[0, idx].grid(True, linestyle='--', alpha=0.6, linewidth=1.0, color="#b7b7b7")
-    axes_cramp[0, idx].set_axisbelow(True)
-    if idx == 0:
-        axes_cramp[0, idx].legend(fontsize=9, framealpha=0.95, edgecolor='black', loc='best')
-    
-    # INL subplot (bottom row)
-    axes_cramp[1, idx].plot(codes_dnl, inl_clm, label='CLM Only', linewidth=2.2, alpha=0.85, color='#D62728')
-    axes_cramp[1, idx].plot(codes_dnl, inl_nl, label='Non-Linearities Only', linewidth=2.2, alpha=0.85, color='#1F77B4')
-    axes_cramp[1, idx].plot(codes_dnl, inl_both, label='CLM + Non-Linearities', linewidth=2.2, alpha=0.85, color='#2CA02C')
-    axes_cramp[1, idx].axhline(y=0, color='black', linestyle='-', linewidth=0.8, alpha=0.4)
-    axes_cramp[1, idx].set_ylabel("INL (LSB)", fontsize=11, fontweight='bold')
-    axes_cramp[1, idx].set_xlabel("Digital Code", fontsize=11, fontweight='bold')
-    axes_cramp[1, idx].grid(True, linestyle='--', alpha=0.6, linewidth=1.0, color="#b7b7b7")
-    axes_cramp[1, idx].set_axisbelow(True)
-
-fig_cramp.suptitle('DNL and INL Sensitivity to Ramp Capacitance (C_ramp) - I_ch = 300 nA', 
-                    fontsize=14, fontweight='bold', y=1.00)
-plt.tight_layout()
-save_figure(fig_cramp, 'dtc_dnl_inl_cramp_sweep.png')
-plt.close(fig_cramp)
-
-print(f"Parametric sweep plots saved successfully!")
+print(f"\n✓ C0 sweep plot saved!")
+print("=" * 60)

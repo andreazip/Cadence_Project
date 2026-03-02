@@ -25,21 +25,21 @@ if __name__ == "__main__":
     
     # Option 2: Plot SPECIFIC TASKS (used only if PLOT_ALL = False)
     # Uncomment task names below that you want to plot
-    # SELECTED_TASKS = [
-    #     "constant_slope_sweeps",
-    #     "constant_slope_direct_csv",
-    #     "constant_slope_linearity",
-    #     # "constant_slope_mc_linearity",
-    #     # "constant_slope_transients_4bit",
-    #     # "constant_slope_transients_5bit",
-    #     # "constant_slope_pvt",
-    #     # "constant_slope_digital_sweep_mc",
-    #     # "constant_slope_histogram",
-    #     # "variable_slope_sweeps",
-    #     # "variable_slope_linearity",
-    #     # "phase_interpolator_sweeps",
-    #     # "phase_interpolator_linearity",
-    # ]
+    SELECTED_TASKS = [
+        "constant_slope_sweeps",
+        "constant_slope_direct_csv",
+        "constant_slope_linearity",
+        # "constant_slope_mc_linearity",
+        # "constant_slope_transients_4bit",
+        # "constant_slope_transients_5bit",
+        # "constant_slope_pvt",
+        # "constant_slope_digital_sweep_mc",
+        # "constant_slope_histogram",
+        # "variable_slope_sweeps",
+        # "variable_slope_linearity",
+        # "phase_interpolator_sweeps",
+        # "phase_interpolator_linearity",
+    ]
     
     # ========================================================================
     # Available tasks (for reference):

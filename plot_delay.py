@@ -3,7 +3,27 @@ import matplotlib.pyplot as plt
 import matplotlib
 import re
 import numpy as np
+import argparse
 from pathlib import Path
+
+# ============================================================================
+# QUICK CLI CHEATSHEET (run from project root)
+# ============================================================================
+# Quick interactive help:
+#   python plot_delay.py jhelp
+#
+# List plot types:
+#   python plot_delay.py --list-types
+#
+# Auto-detect best plot for a CSV:
+#   python plot_delay.py --file cs_delay_code_4bit.csv --type auto
+#
+# Force linearity (DNL/INL):
+#   python plot_delay.py --file cs_delay_code_4bit.csv --type linearity
+#
+# Common options:
+#   --base-dir results_cadence --plot-dir plots
+#   --max-realizations 200 --max-iterations 200
 
 # ============================================================================
 # PUBLICATION-READY PLOT STYLE
@@ -60,8 +80,7 @@ plt.rcParams.update({
 class CadencePlotter:
     def __init__(self, base_dir="results_cadence", plot_dir=None):
         self.base_dir = Path(base_dir)
-        # Always save plots to the OneDrive folder for consistency.
-        self.plot_dir = Path(r"C:\Users\zipar\OneDrive - Delft University of Technology\Second Year\MEP\plots")
+        self.plot_dir = Path(plot_dir) if plot_dir else Path("plots")
         self.plot_dir.mkdir(exist_ok=True)
         
         # Professional color palette for consistent styling
@@ -170,14 +189,42 @@ class CadencePlotter:
     
     def load_data(self, filename):
         path = Path(filename)
+        if path.suffix == "":
+            path = path.with_suffix(".csv")
         if not path.exists():
             path = self.base_dir / filename
+            if path.suffix == "":
+                path = path.with_suffix(".csv")
         if not path.exists():
             print(f"Warning: File {filename} not found.")
             return None, path
         df = pd.read_csv(path)
         df.columns = df.columns.str.strip()
         return df, path
+
+    def _compute_dnl_inl(self, y, lsb=None):
+        """Compute DNL/INL robustly and return (dnl, inl, lsb_used)."""
+        y_arr = np.asarray(y, dtype=float)
+        if len(y_arr) < 2:
+            return np.array([]), np.array([]), 0.0
+
+        if lsb is None:
+            lsb = (y_arr[-1] - y_arr[0]) / (len(y_arr) - 1)
+
+        if lsb == 0 or np.isnan(lsb):
+            return np.array([]), np.array([]), lsb
+
+        dnl = np.insert(np.diff(y_arr) / lsb - 1, 0, 0)
+        inl = np.cumsum(dnl)
+        return dnl, inl, lsb
+
+    def _remove_middle_code_rows(self, data):
+        """Remove redundant middle code row from column-based MC matrices."""
+        if data is None or data.shape[0] == 0:
+            return data, None
+        mid_idx = data.shape[0] // 2
+        keep_indices = [i for i in range(data.shape[0]) if i != mid_idx]
+        return data.iloc[keep_indices, :], mid_idx
 
     def _get_axis_labels(self, filename):
         """Extracts the X-axis parameter from filenames like 'vs_delay_vdd.csv'."""
@@ -579,12 +626,9 @@ class CadencePlotter:
             if len(y_vals) < 2:
                 continue
 
-            lsb_ideal = (y_vals[-1] - y_vals[0]) / (len(y_vals) - 1)
-            if lsb_ideal == 0 or np.isnan(lsb_ideal):
+            dnl, inl, _ = self._compute_dnl_inl(y_vals)
+            if len(dnl) == 0:
                 continue
-
-            dnl = np.insert(np.diff(y_vals) / lsb_ideal - 1, 0, 0)
-            inl = np.cumsum(dnl)
             x_idx = np.arange(len(y_vals))
 
             ax_dnl.plot(x_idx, dnl, color=self.colors['secondary'], alpha=0.2, linewidth=1.4)
@@ -647,7 +691,7 @@ class CadencePlotter:
             
             if not window_data.empty:
                 times = window_data['Time'].values
-                powers = window_data['Power'].values
+                powers = np.abs(window_data['Power'].values)
                 # Trapezoidal integration: sum of (dx * (y[i] + y[i+1])/2)
                 energy = np.sum((times[1:] - times[:-1]) * (powers[1:] + powers[:-1]) / 2.0)
                 actual_duration = times[-1] - times[0]
@@ -659,7 +703,7 @@ class CadencePlotter:
             all_codes.append(i)
         
         # Find and identify the code with maximum power
-        max_idx = np.argmax(all_averages)
+        max_idx = num_codes//2 # Default to middle code if no data
         max_code = all_codes[max_idx]
         
         # Filter out the max power code
@@ -807,13 +851,13 @@ class CadencePlotter:
         num_realizations = min(data.shape[1], max_realizations)
         num_codes = data.shape[0]
         
-        # Indices to keep: skip code 0 (row 0) and redundant code at 128
-        indices_to_keep = [i for i in range(num_codes) if i not in [0, 128]]
-        data_clean = data.iloc[indices_to_keep, :num_realizations]
+        data_subset = data.iloc[:, :num_realizations]
+        data_clean, removed_idx = self._remove_middle_code_rows(data_subset)
+        codes = np.arange(data_clean.shape[0])
         
-        codes = np.arange(len(indices_to_keep))
-        
-        print(f"Processing {num_realizations} sweep curves with {len(indices_to_keep)} codes per curve")
+        print(f"Processing {num_realizations} sweep curves with {data_clean.shape[0]} codes per curve")
+        if removed_idx is not None:
+            print(f"Removed redundant middle code at index {removed_idx}")
         
         # Create figure
         fig, ax = self._create_figure(figsize=(12, 7))
@@ -863,11 +907,12 @@ class CadencePlotter:
         num_realizations = min(data.shape[1], max_realizations)
         num_codes = data.shape[0]
         
-        # Indices to keep: skip code 0 (row 0) and redundant code at 128
-        indices_to_keep = [i for i in range(num_codes) if i not in [0, 128]]
-        data_clean = data.iloc[indices_to_keep, :num_realizations]
-        
-        print(f"Processing {num_realizations} iterations with {len(indices_to_keep)} codes per iteration")
+        data_subset = data.iloc[:, :num_realizations]
+        data_clean, removed_idx = self._remove_middle_code_rows(data_subset)
+
+        print(f"Processing {num_realizations} iterations with {data_clean.shape[0]} codes per iteration")
+        if removed_idx is not None:
+            print(f"Removed redundant middle code at index {removed_idx}")
         
         # Create figure with 2 subplots (DNL and INL)
         fig, (ax_dnl, ax_inl) = self._create_figure(nrows=2, ncols=1, figsize=(14, 10), sharex=True)
@@ -878,14 +923,10 @@ class CadencePlotter:
             
             if len(delays) < 2:
                 continue
-            
-            # Calculate DNL and INL
-            lsb_ideal = (delays[-1] - delays[0]) / (len(delays) - 1)
-            if lsb_ideal == 0 or np.isnan(lsb_ideal):
+
+            dnl, inl, _ = self._compute_dnl_inl(delays)
+            if len(dnl) == 0:
                 continue
-            
-            dnl = np.insert(np.diff(delays) / lsb_ideal - 1, 0, 0)
-            inl = np.cumsum(dnl)
             
             # Plot with subtle styling
             ax_dnl.plot(codes, dnl,
@@ -970,14 +1011,9 @@ class CadencePlotter:
             
             # Calculate DNL and INL
             if len(y) > 1:
-                if lsb is None:
-                    lsb_ideal = (y[-1] - y[0]) / (len(y) - 1)
-                else:
-                    lsb_ideal = lsb
-                if lsb_ideal == 0:
+                dnl, inl, _ = self._compute_dnl_inl(y, lsb=lsb)
+                if len(dnl) == 0:
                     continue
-                dnl = np.insert(np.diff(y) / lsb_ideal - 1, 0, 0)
-                inl = np.cumsum(dnl)
                 
                 # Plot with transparency - NO LABELS to avoid cluttering
                 ax_dnl.plot(x_labels, dnl,
@@ -1030,9 +1066,9 @@ class CadencePlotter:
         if plot_df is None: return
 
         y = plot_df['y'].values
-        lsb_ideal = (y[-1] - y[0]) / (len(y) - 1) if len(y) > 1 else 0
-        dnl = np.insert(np.diff(y) / lsb_ideal - 1, 0, 0)
-        inl = np.cumsum(dnl)
+        dnl, inl, lsb_ideal = self._compute_dnl_inl(y)
+        if len(dnl) == 0:
+            return
 
         # Create figure with improved styling
         fig, (ax1, ax2) = self._create_figure(nrows=2, ncols=1, figsize=(11, 9), sharex=True)
@@ -1082,8 +1118,9 @@ class CadencePlotter:
         
         # Load and preprocess data
         y_data = pd.to_numeric(df.iloc[:, y_col_idx], errors='coerce').dropna()
-        original_length = len(y_data)
-        codes_to_remove = original_length // 2 + 1
+        original_length = len(y_data)        
+        codes_to_remove = original_length // 2 
+        print(len(y_data), codes_to_remove)
         
         # Remove middle code and re-index
         if remove_code and codes_to_remove < original_length:
@@ -1123,9 +1160,9 @@ class CadencePlotter:
         
         # ===== PLOT 2: DNL and INL =====
         y = y_data.values
-        lsb_ideal = (y[-1] - y[0]) / (len(y) - 1) if len(y) > 1 else 1e-9
-        dnl = np.insert(np.diff(y) / lsb_ideal - 1, 0, 0)
-        inl = np.cumsum(dnl)
+        dnl, inl, lsb_ideal = self._compute_dnl_inl(y)
+        if len(dnl) == 0:
+            return
         
         fig2, (ax2, ax3) = self._create_figure(nrows=2, ncols=1, figsize=(11, 9), sharex=True)
         
@@ -1693,10 +1730,10 @@ class CadencePlotter:
                 group = group.sort_values('code')
                 y = group['delay'].values
                 x_labels = group['code'].apply(lambda c: bin(c)[2:].zfill(5))
-                
-                lsb = (y.max() - y.min()) / (len(y) - 1)
-                dnl = np.insert(np.diff(y) / lsb - 1, 0, 0)
-                inl = np.cumsum(dnl)
+
+                dnl, inl, _ = self._compute_dnl_inl(y)
+                if len(dnl) == 0:
+                    continue
 
                 color = corner_colors.get(base_corner, 'black')
                 style = temp_styles.get(temp, '-')
@@ -1743,6 +1780,89 @@ class CadencePlotter:
         save_path = self._get_save_path(filename, "Linearity", suffix)
         self._save_figure(fig, save_path)
 
+    def available_plot_types(self):
+        """Return supported plot types for CLI and scripting usage."""
+        return {
+            "auto": "Auto-detect best plotting method",
+            "sweep": "Digital/code sweep",
+            "linearity": "DNL/INL linearity",
+            "signals": "Transient signals",
+            "histogram": "Histogram / MC distribution",
+            "mc_sweep": "MC sweep all realizations",
+            "mc_linearity": "MC linearity all realizations",
+            "mc_linearity_iteration": "MC linearity per iteration",
+            "mcparamset_sweep": "MC paramset sweeps",
+            "mcparamset_linearity": "MC paramset DNL/INL",
+            "direct_csv": "Direct CSV sweep + linearity",
+            "avg_power": "Average power by code",
+            "corner_temp": "Corner temperature sweep",
+            "corner_linearity": "Corner DNL/INL",
+            "generic": "Generic single X/Y sweep",
+            "pvt_sweep": "PVT sweep",
+            "pvt_linearity": "PVT linearity",
+        }
+
+    def plot_file(self, filename, plot_type="auto", **kwargs):
+        """Single entry point for plotting a file by explicit plot type."""
+        plot_type = (plot_type or "auto").lower().strip()
+
+        if plot_type == "linearity":
+            df_preview, _ = self.load_data(filename)
+            if df_preview is not None:
+                has_bit_cols = any(c.startswith('d') and c[1:].isdigit() for c in df_preview.columns)
+                has_xy_pair = len(df_preview.columns) >= 2 and str(df_preview.columns[0]).endswith(' X') and str(df_preview.columns[1]).endswith(' Y')
+                if has_xy_pair and not has_bit_cols:
+                    print("Info: Detected direct X/Y CSV. Using direct_csv mode for linearity and sweep.")
+                    return self.plot_direct_csv_sweep(
+                        filename,
+                        y_col_idx=kwargs.get("y_col_idx", 1),
+                        remove_code=kwargs.get("remove_code", True),
+                    )
+
+        dispatch = {
+            "auto": lambda: self.smart_plot(filename),
+            "sweep": lambda: self.plot_digital_sweep(filename, max_iterations=kwargs.get("max_iterations", 200)),
+            "linearity": lambda: self.plot_linearity(filename),
+            "signals": lambda: self.plot_signals(
+                filename,
+                filters=kwargs.get("filters"),
+                t_range=kwargs.get("t_range"),
+                subplots=kwargs.get("subplots", False),
+            ),
+            "histogram": lambda: self.plot_histogram(filename),
+            "mc_sweep": lambda: self.plot_mc_sweep_all_realizations(filename, max_realizations=kwargs.get("max_realizations", 200)),
+            "mc_linearity": lambda: self.plot_mc_linearity_all_realizations_xy(filename, max_realizations=kwargs.get("max_realizations", 200)),
+            "mc_linearity_iteration": lambda: self.plot_mc_linearity_per_iteration(
+                filename,
+                lsb_ns=kwargs.get("lsb_ns"),
+                max_iterations=kwargs.get("max_iterations", 200),
+            ),
+            "mcparamset_sweep": lambda: self.plot_mcparamset_sweep(filename, max_realizations=kwargs.get("max_realizations", 200)),
+            "mcparamset_linearity": lambda: self.plot_mcparamset_linearity(filename, max_realizations=kwargs.get("max_realizations", 200)),
+            "direct_csv": lambda: self.plot_direct_csv_sweep(
+                filename,
+                y_col_idx=kwargs.get("y_col_idx", 1),
+                remove_code=kwargs.get("remove_code", True),
+            ),
+            "avg_power": lambda: self.plot_average_power_by_code(
+                filename,
+                start_time=kwargs.get("start_time", 2e-8),
+                window_size=kwargs.get("window_size", 5e-8),
+                num_codes=kwargs.get("num_codes", 256),
+            ),
+            "corner_temp": lambda: self.plot_corner_temperature_sweep(filename),
+            "corner_linearity": lambda: self.plot_corner_linearity_xy(filename),
+            "generic": lambda: self.plot_generic_sweep(filename),
+            "pvt_sweep": lambda: self.plot_pvt_sweep(filename, subfigure=kwargs.get("subfigure", False), VDD=kwargs.get("vdd", False)),
+            "pvt_linearity": lambda: self.plot_pvt_linearity(filename, subplots=kwargs.get("subplots", False)),
+        }
+
+        if plot_type not in dispatch:
+            valid = ", ".join(sorted(dispatch.keys()))
+            raise ValueError(f"Unknown plot type '{plot_type}'. Valid options: {valid}")
+
+        return dispatch[plot_type]()
+
     def smart_plot(self, filename):
         """Routes any filename to the correct plotting function."""
         df, path = self.load_data(filename)
@@ -1785,7 +1905,7 @@ def define_plot_tasks():
             "files": [
                 "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv", "cs_delay_code_8bit.csv",
                 "cs_delay_code_5bit_nonidealcurs.csv", "cs_delay_code_5bit_coarse.csv",
-                "cs_power_code_4bit.csv", "cs_power_code_5bit.csv", 
+                "cs_power_code_4bit.csv", "cs_power_code_5bit.csv", "cs_delay_code_6bit",
                 "cs_power_code_5bit_nonidealcurs.csv", "cs_power_code_5bit_coarse.csv",
                 "cs_delay_mc_tt_00000.csv", "cs_power_mc_tt_00000.csv", 
                 "cs_delay_mc_tt_11111.csv", "cs_power_mc_tt_11111.csv",  
@@ -1803,7 +1923,7 @@ def define_plot_tasks():
             "files": [
                 "cs_delay_code_4bit.csv", "cs_delay_code_5bit.csv", "cs_delay_code_8bit.csv",
                 "cs_delay_code_5bit_coarse.csv", "cs_delay_code_5bit_nonidealcurs.csv",
-                "cs_delay_code_5bit_counter.csv"
+                "cs_delay_code_5bit_counter.csv", "cs_delay_code_6bit.csv"
             ],
             "action": lambda plotter, f: plotter.plot_linearity(f)
         },
@@ -1875,8 +1995,8 @@ def define_plot_tasks():
         },
         "constant_slope_avg_power": {
             "description": "Constant slope average power analysis by code",
-            "files": ["cs_Pinst_code_8bit.csv"],
-            "action": lambda plotter, f: plotter.plot_average_power_by_code(f)
+            "files": [("cs_Pinst_code_8bit.csv",8, 5e-8), ("cs_power_code_6bit.csv",6,2e-8)],
+            "action": lambda plotter, f: plotter.plot_average_power_by_code(f[0], num_codes=2**f[1]-1, window_size=f[2])
         },
         "constant_slope_histogram": {
             "description": "Constant slope DR/Resolution histogram",
@@ -1962,25 +2082,110 @@ def run_plots(plotter, plot_all=True, selected_tasks=None):
             print(f"[ERROR] {task_name} failed: {str(e)}")
 
 
+def _parse_t_range(value):
+    if value is None:
+        return None
+    parts = [p.strip() for p in str(value).split(',')]
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError("t-range must be in form 'start,stop'")
+    try:
+        return float(parts[0]), float(parts[1])
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("t-range values must be numeric") from exc
+
+
+def build_cli_parser():
+    parser = argparse.ArgumentParser(
+        description="Flexible Cadence CSV plotting utility",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("command", nargs="?", choices=["jhelp"],
+                        help="Quick help command (run: python plot_delay.py jhelp)")
+    parser.add_argument("--base-dir", default="results_cadence", help="Directory containing CSV files")
+    parser.add_argument("--plot-dir", default="C:\\Users\\zipar\\OneDrive - Delft University of Technology\\Second Year\\MEP\\plots", help="Directory where plots are saved")
+    parser.add_argument("--file", help="CSV filename to plot")
+    parser.add_argument("--type", default="auto", help="Plot type (use --list-types to see options)")
+    parser.add_argument("--list-types", action="store_true", help="List supported plot types and exit")
+    parser.add_argument("--task", action="append", help="Run a predefined task name (can repeat)")
+    parser.add_argument("--all-tasks", action="store_true", help="Run all predefined tasks")
+
+    parser.add_argument("--max-realizations", type=int, default=200)
+    parser.add_argument("--max-iterations", type=int, default=200)
+    parser.add_argument("--lsb-ns", type=float, default=None)
+    parser.add_argument("--y-col-idx", type=int, default=1)
+    parser.add_argument("--no-remove-code", action="store_true")
+    parser.add_argument("--num-codes", type=int, default=256)
+    parser.add_argument("--window-size", type=float, default=5e-8)
+    parser.add_argument("--start-time", type=float, default=2e-8)
+    parser.add_argument("--subplots", action="store_true")
+    parser.add_argument("--subfigure", action="store_true")
+    parser.add_argument("--vdd", action="store_true")
+    parser.add_argument("--filters", nargs='*', default=None, help="Signal filters (for signals plot)")
+    parser.add_argument("--t-range", type=_parse_t_range, default=None, help="Time range: start,stop")
+
+    return parser
+
+
+def print_jhelp(plotter):
+    print("\nJHELP - Cadence Plot Quick Guide")
+    print("=" * 60)
+    print("\n1) Most common commands")
+    print("  python plot_delay.py --list-types")
+    print("  python plot_delay.py --file your_file.csv --type auto")
+    print("  python plot_delay.py --file cs_delay_code_4bit.csv --type linearity")
+    print("  python plot_delay.py --file cs_delay_code_8bit_counter_mc.csv --type mc_linearity --max-realizations 200")
+    print("\n2) Important options")
+    print("  --base-dir results_cadence   Where CSV files are")
+    print("  --plot-dir plots             Where output images go")
+    print("  --type <plot_type>           Which plot style to generate")
+    print("\n3) Available plot types")
+    for name, desc in plotter.available_plot_types().items():
+        print(f"  - {name:22s} {desc}")
+    print("\nTip: If unsure, use --type auto.\n")
+
+
+def main():
+    parser = build_cli_parser()
+    args = parser.parse_args()
+
+    plotter = CadencePlotter(base_dir=args.base_dir, plot_dir=args.plot_dir)
+
+    if args.command == "jhelp":
+        print_jhelp(plotter)
+        return
+
+    if args.list_types:
+        print("Available plot types:")
+        for name, desc in plotter.available_plot_types().items():
+            print(f"  - {name:22s} {desc}")
+        return
+
+    if args.all_tasks or args.task:
+        run_plots(plotter, plot_all=args.all_tasks, selected_tasks=args.task)
+        return
+
+    if not args.file:
+        parser.error("Provide --file for single-file plotting, or use --task / --all-tasks")
+
+    plotter.plot_file(
+        args.file,
+        plot_type=args.type,
+        max_realizations=args.max_realizations,
+        max_iterations=args.max_iterations,
+        lsb_ns=args.lsb_ns,
+        y_col_idx=args.y_col_idx,
+        remove_code=not args.no_remove_code,
+        num_codes=args.num_codes,
+        window_size=args.window_size,
+        start_time=args.start_time,
+        subplots=args.subplots,
+        subfigure=args.subfigure,
+        vdd=args.vdd,
+        filters=args.filters,
+        t_range=args.t_range,
+    )
+
+
 # --- Usage ---
 if __name__ == "__main__":
-    plotter = CadencePlotter(base_dir="results_cadence")
-    
-    # Plot MC simulations (200 realizations)
-    print("\n" + "="*70)
-    print("PLOTTING MC SIMULATIONS (200 Realizations)")
-    print("="*70)
-    
-    run_plots(plotter, plot_all=False, selected_tasks=["constant_slope_avg_power"])
-    plotter.plot_direct_csv_sweep("cs_delay_code_8bit.csv", y_col_idx=1, remove_code=True)
-    print("\n" + "="*70)
-    print("All MC plots saved to: plots/constant_slope/")
-    print("="*70)
-    
-    # Option 2: Plot only specific tasks (uncomment to use)
-    # selected = [
-    #     "constant_slope_sweeps",
-    #     "constant_slope_linearity",
-    #     "constant_slope_direct_csv"
-    # ]
-    # run_plots(plotter, plot_all=False, selected_tasks=selected)
+    main()
