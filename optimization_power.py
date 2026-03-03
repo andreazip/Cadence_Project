@@ -30,7 +30,7 @@ plt.rcParams.update({
 
 def get_ca_cdac(n, Cu0):
     """Calculate capacitance values based on bit width."""
-    Cu = Cu0 * 2**(n/2)
+    Cu = Cu0 * 2**((n-1)/2)
     Ca = Cu * (2**n - 1)  # Regular: full CDAC
     return Cu, Ca
 
@@ -257,7 +257,7 @@ def plot_optimal_frontier(ax, min_points, title="", mode_label=""):
 # ============================================================
 
 SAVE_DIR = Path("C:\\Users\\zipar\\OneDrive - Delft University of Technology\\Second Year\\MEP\\plots_optimization")
-VDD, K_slope, C_load, k_lim, Cu0, res, NBITS = 1.1, 380e6, 120e-15, 1.0, 1e-15, 50e-12, 10
+VDD, K_slope, C_load, k_lim, Cu0, res, NBITS = 1.1, 380e6, 120e-15, 1.0, 1e-15, 20e-12, 10
 K_slopes = [ 30e6, 70e6, 100e6, 200e6, 300e6]
 k_lim_val = 1.0
 

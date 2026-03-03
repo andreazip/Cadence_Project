@@ -77,21 +77,21 @@ def E_msb_1(Ca, C_k, Vdd):
 
 RUN = {
     "DAC_mismatch": True,
-    "CLM": True,
+    "CLM": False,
     "Non-linearities-capacitor": False
 }
 
 #define delay in the DTC by using 
-n = 6 #number of bits
+n = 8 #number of bits
 N = 2**n-1 #max ndigital number
-Cu = 2e-15 #unit capacitance size
+Cu = 8e-15 #unit capacitance size
 
 # Generate mismatched binary capacitors
 C_array = np.zeros(n-1)
 
 #sigmaC/C = Ac/sqrt(A) Pelgrom's law, where A is the area of the capacitor and Ac is a process-dependent constant. Assuming C = Cu, we can express the mismatch as sigmaC/C = Ac/sqrt(Cu). For a given mismatch factor (e.g., 0.003), we can derive Ac as follows:
 Ac = 5.218e-3 #nm, which is a typical value for modern processes
-A = 1.69 #um^2, which is a typical area for a 30fF capacitor
+A = 4.33 #um^2, which is a typical area for a 30fF capacitor
 
 sigma_c = Ac / np.sqrt(A)*Cu  # Calculate sigmaC based on Pelgrom's law
 
@@ -104,14 +104,14 @@ for j in range(n-1):
         C_array[j] = ideal_value + mismatch
 
 Ca = np.sum(C_array)
-C0= Ca #fF, the reference capacitor, which can also be mismatched
+C0= 1.5*Ca #fF, the reference capacitor, which can also be mismatched
 
 Vdd = 1.1 #V
-f = 50e6 #Hz, operating frequency
+f = 20e6 #Hz, operating frequency
 
 Vth = 0.55 #V
-Ich = 1.05e-6 #A
-Cramp = 3e-15 #F
+Ich = 350e-9 #A
+Cramp = 5e-15 #F
 
 #K_slope = 350 MV/s
 
