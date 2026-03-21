@@ -2108,6 +2108,7 @@ def build_cli_parser():
     parser.add_argument("--list-types", action="store_true", help="List supported plot types and exit")
     parser.add_argument("--task", action="append", help="Run a predefined task name (can repeat)")
     parser.add_argument("--all-tasks", action="store_true", help="Run all predefined tasks")
+    parser.add_argument("--coarse-fine", action="store_true", help="Run coarse-fine processing flow")
 
     parser.add_argument("--max-realizations", type=int, default=200)
     parser.add_argument("--max-iterations", type=int, default=200)
@@ -2162,6 +2163,11 @@ def main():
 
     if args.all_tasks or args.task:
         run_plots(plotter, plot_all=args.all_tasks, selected_tasks=args.task)
+        return
+
+    if args.coarse_fine:
+        from process_coarse_fine import process_coarse_fine
+        process_coarse_fine()
         return
 
     if not args.file:

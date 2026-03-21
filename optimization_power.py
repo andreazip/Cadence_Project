@@ -36,7 +36,7 @@ def get_ca_cdac(n, Cu0):
 
 def get_p_ana_coefficient(use_bit_extension=False):
     """Get analog power coefficient (divide factor)."""
-    return 8 if use_bit_extension else 4
+    return 2 if use_bit_extension else 1
 
 def power_method(VDD, K_slope, C_load, k_lim, Cu0, res, NBITS, use_bit_extension=False):
     """
@@ -48,31 +48,38 @@ def power_method(VDD, K_slope, C_load, k_lim, Cu0, res, NBITS, use_bit_extension
         If True, use bit extension mode (one fewer bit in CDAC)
     """
     P_dict = {}
-    T_DTC_max = VDD / K_slope if use_bit_extension else VDD/2 / K_slope
+    T_DTC_max = 2*VDD / K_slope if use_bit_extension else VDD / K_slope
     p_ana_coeff = get_p_ana_coefficient(use_bit_extension)
     n_start = 3 if use_bit_extension else 1
+    f = 100e6  # 100 MHz 
     
     for n in range(n_start, NBITS + 1):
         n_actual = (n - 1) if use_bit_extension else n
         Cu, Ca = get_ca_cdac(n_actual, Cu0)
         
         Co_res = (Cu * VDD) / (K_slope * res) - Ca 
-        Co_min = max(k_lim * Ca, Co_res)
+        Co_min = max(1 * Ca, Co_res)
         
-        T_list = np.linspace(0.01e-9, T_DTC_max, 200)
+        if C_load==0:
+            if T_DTC_max >10e-9:
+                T_list = np.linspace(10e-9, T_DTC_max, 200)
+            else:
+                return {}  # No valid T_DTC range for zero load
+        else:
+            T_list = np.linspace(res, T_DTC_max, 200)
         P_total = np.zeros(len(T_list))
         P_cnt = np.zeros(len(T_list))
         P_ana = np.zeros(len(T_list))
         
         t_corner = 2*(Ca * VDD) / (K_slope * (Co_min + Ca)) if use_bit_extension else (Ca * VDD) / (K_slope * (Co_min + Ca))
-        p_corner_ana = Co_min * K_slope * VDD / p_ana_coeff
+        p_corner_ana = Co_min * Ca/(Co_min + Ca)*VDD**2*f/p_ana_coeff 
         p_corner_cnt = (C_load * VDD**2) / t_corner 
 
         for i, t_DTC in enumerate(T_list):
             C0_req = 2*(Ca * VDD) / (K_slope * t_DTC) - Ca if use_bit_extension else (Ca * VDD) / (K_slope * t_DTC) - Ca
             C0 = max(C0_req, Co_min)
             P_cnt[i] = (C_load * VDD**2) / t_DTC
-            P_ana[i] = C0 * K_slope * VDD / p_ana_coeff
+            P_ana[i] = C0 * Ca/(C0 + Ca)*VDD**2*f/p_ana_coeff 
             P_total[i] = P_cnt[i] + P_ana[i]
         
         P_dict[n] = {
@@ -96,6 +103,8 @@ def get_corners_only(VDD, K_slope, C_load, k_lim, Cu0, res, NBITS, use_bit_exten
     p_ana_coeff = get_p_ana_coefficient(use_bit_extension)
     n_start = 3 if use_bit_extension else 2
     n_start_check = 4 if use_bit_extension else 2
+
+    f= 100e6  # 100 MHz
     
     for n in range(n_start, NBITS + 1):
         n_actual = (n - 1) if use_bit_extension else n
@@ -109,7 +118,7 @@ def get_corners_only(VDD, K_slope, C_load, k_lim, Cu0, res, NBITS, use_bit_exten
         if n >= n_start_check and (t_corner <= previous_t * 1.001):
             break
         
-        p_ana = Co_min * K_slope * VDD / p_ana_coeff
+        p_ana = Co_min * Ca/(Co_min + Ca)*VDD**2*f/p_ana_coeff
         p_dig = (C_load * VDD**2) / t_corner
         
         corners.append({
@@ -257,8 +266,9 @@ def plot_optimal_frontier(ax, min_points, title="", mode_label=""):
 # ============================================================
 
 SAVE_DIR = Path("C:\\Users\\zipar\\OneDrive - Delft University of Technology\\Second Year\\MEP\\plots_optimization")
-VDD, K_slope, C_load, k_lim, Cu0, res, NBITS = 1.1, 380e6, 120e-15, 1.0, 1e-15, 20e-12, 10
-K_slopes = [ 30e6, 70e6, 100e6, 200e6, 300e6]
+VDD, K_slope, C_load, k_lim, Cu0, res, NBITS = 1.1, 380e6, 120e-15, 300e6, 44e-18, 5e-12, 11
+K_slopes = np.linspace(100e6, 300e6, 10)
+
 k_lim_val = 1.0
 
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
