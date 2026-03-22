@@ -35,11 +35,11 @@ CONFIG = {
     "split_n_coarse_values": np.arange(2, 9),
     "include_delay_line_modes": True,
     "coarse_values": {
-        "n": 6,
+        "n": 5,
         "Cu": 2e-15,
         "Vdd": 1.1,
         "f": 100e6,
-        "Ich" : 1.733e-6,
+        "Ich" : 0.853e-6,
         #"Ich": 203.702e-9,
         "Cramp": 1e-15,
         "Cramp_dl": 0.5e-15,  # Delay-line ramp capacitance (defaults to Cramp if omitted)
@@ -50,13 +50,14 @@ CONFIG = {
         "C0_scale": 1,
         "dac_mode": "thermometer",
         "slope_mode": "delay_line",  # "constant" (CS), "variable" (VS), or "delay_line" (DL)
+        "delay_line_selection_mode": "tapped",  # "tapped" (constant power) or "accumulated" (rising power)
     },
     "fine_values": {
-        "n": 5,
+        "n": 6,
         "Cu": 2e-15,
         "Vdd": 1.1,
         "f": 100e6,
-        "Ich": 41.580e-6,
+        "Ich": 41.733e-6,
         "Cramp": 0.5e-15,
         "Cramp_dl": 0.5e-15,  # Delay-line ramp capacitance (defaults to Cramp if omitted)
         "C_ramp_cu": 2e-15,  # VS CDAC unit capacitance (defaults to Cramp if omitted)
@@ -66,6 +67,7 @@ CONFIG = {
         "C0_scale": 1,
         "dac_mode": "binary",
         "slope_mode": "delay_line",  # "constant" (CS), "variable" (VS), or "delay_line" (DL)
+        "delay_line_selection_mode": "tapped",  # "tapped" (constant power) or "accumulated" (rising power)
     },
 }
 

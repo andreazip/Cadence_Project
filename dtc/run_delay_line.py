@@ -10,13 +10,17 @@ CONFIG = {
     "save_dir": Path(r"C:\Users\zipar\OneDrive - Delft University of Technology\Second Year\MEP"),
     "plot_folder": "plot_python",
     "delay_line_folder": "delay_line",
-    "n_bits": 11,
+    "n_bits": 10,
     "vdd": 1.1,
     "vth": 0.55,
     # Apply directly to Vdd and Vth in runner (typ. 0.5 for delay line).
     "voltage_scale_factor_delay_line": 0.5,
-    "ich": 225e-6,
+    "ich": 27.5e-6,
     "cramp": 0.5e-15,
+    "self_power_down_delay_line": "yes",  # "yes" or "no"
+    # 'tapped': all stages active, output tap selected -> constant power vs output index
+    # 'accumulated': active stages increase with index -> rising power
+    "selection_mode": "tapped",
     "f_hz": 100e6,
     # Set sigma_cramp > 0 to model global Cramp mismatch.
     "sigma_cramp": 0.0,
@@ -27,8 +31,8 @@ CONFIG = {
 def plot_delay_line(replica_axis, delay_s, power_w, out_dir):
     fig_delay, ax_delay = plt.subplots(figsize=(10, 6))
     ax_delay.plot(replica_axis, delay_s * 1e9, color="#D62728", linewidth=2.6, label="Delay")
-    ax_delay.set_title("Delay Line Total Delay vs Replica Count", fontsize=14, fontweight="bold", pad=12)
-    ax_delay.set_xlabel("Replica Count N", fontsize=12, fontweight="bold")
+    ax_delay.set_title("Delay Line Delay vs Output Tap", fontsize=14, fontweight="bold", pad=12)
+    ax_delay.set_xlabel("Output Tap Index", fontsize=12, fontweight="bold")
     ax_delay.set_ylabel("Delay [ns]", fontsize=12, fontweight="bold")
     ax_delay.grid(True, linestyle="--", alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax_delay.set_axisbelow(True)
@@ -38,8 +42,8 @@ def plot_delay_line(replica_axis, delay_s, power_w, out_dir):
 
     fig_power, ax_power = plt.subplots(figsize=(10, 6))
     ax_power.plot(replica_axis, power_w * 1e6, color="#1F77B4", linewidth=2.6, label="Power")
-    ax_power.set_title("Delay Line Total Power vs Replica Count", fontsize=14, fontweight="bold", pad=12)
-    ax_power.set_xlabel("Replica Count N", fontsize=12, fontweight="bold")
+    ax_power.set_title("Delay Line Power vs Output Tap", fontsize=14, fontweight="bold", pad=12)
+    ax_power.set_xlabel("Output Tap Index", fontsize=12, fontweight="bold")
     ax_power.set_ylabel("Power [uW]", fontsize=12, fontweight="bold")
     ax_power.grid(True, linestyle="--", alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax_power.set_axisbelow(True)
@@ -100,6 +104,8 @@ def main():
         cramp=CONFIG["cramp"],
         freq_hz=CONFIG["f_hz"],
         sigma_cramp=CONFIG["sigma_cramp"],
+        self_power_down=CONFIG.get("self_power_down_delay_line", False),
+        selection_mode=CONFIG.get("selection_mode", "tapped"),
     )
 
     nominal = sim.evaluate_total(mismatch_enable=False)

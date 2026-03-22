@@ -233,6 +233,7 @@ class VariableSlopeDTC:
         i1,
         c1,
         c2,
+        self_power_down=True,
     ):
         self.n_bits = n_bits
         self.m = n_bits
@@ -248,6 +249,10 @@ class VariableSlopeDTC:
         self.i1 = i1
         self.c1 = c1
         self.c2 = c2
+        if isinstance(self_power_down, str):
+            self.self_power_down = self_power_down.strip().lower() in {"yes", "true", "1", "on"}
+        else:
+            self.self_power_down = bool(self_power_down)
 
     def build_dac_array(self, mismatch_enable=False, sigma=None):
         sigma_val = self.sigma_c if sigma is None else sigma
@@ -323,7 +328,8 @@ class VariableSlopeDTC:
         raise ValueError("dac_mode must be 'binary', 'thermometer', or 'segmented'")
 
     def energy(self, c_k):
-        return c_k * self.vdd**2
+        power_scale = 0.25 if self.self_power_down else 1.0
+        return c_k * self.vdd**2 * power_scale
 
     def compute_delay(self, vst_array, cap_array, clm_enabled=None, nonlin_enabled=None, ich_val=None):
         if clm_enabled is None:
@@ -371,7 +377,18 @@ class DelayLineDTC:
     global delay/power scaling and does not introduce code-dependent nonlinearity.
     """
 
-    def __init__(self, n_bits, vdd, vth, ich, cramp, freq_hz, sigma_cramp=0.0):
+    def __init__(
+        self,
+        n_bits,
+        vdd,
+        vth,
+        ich,
+        cramp,
+        freq_hz,
+        sigma_cramp=0.0,
+        self_power_down=False,
+        selection_mode="tapped",
+    ):
         self.n_bits = int(n_bits)
         self.vdd = float(vdd)
         self.vth = float(vth)
@@ -379,11 +396,18 @@ class DelayLineDTC:
         self.cramp = float(cramp)
         self.freq_hz = float(freq_hz)
         self.sigma_cramp = float(sigma_cramp)
+        if isinstance(self_power_down, str):
+            self.self_power_down = self_power_down.strip().lower() in {"yes", "true", "1", "on"}
+        else:
+            self.self_power_down = bool(self_power_down)
+        self.selection_mode = str(selection_mode).strip().lower()
 
         if self.n_bits < 1:
             raise ValueError("n_bits must be >= 1")
         if self.ich == 0.0:
             raise ValueError("ich must be non-zero")
+        if self.selection_mode not in {"tapped", "accumulated"}:
+            raise ValueError("selection_mode must be 'tapped' or 'accumulated'")
 
     @property
     def n_replicas(self):
@@ -401,6 +425,8 @@ class DelayLineDTC:
 
         delay_s = ((self.vdd - self.vth) / self.ich) * cramp_eff * n_val
         power_w = cramp_eff * (self.vdd**2) * self.freq_hz * n_val
+        if self.self_power_down:
+            power_w = power_w / 4.0
 
         return {
             "N": float(n_val),
@@ -412,17 +438,28 @@ class DelayLineDTC:
     def characterize_by_replica(self, mismatch_enable=False):
         """Return delay/power arrays from 1..N replicas.
 
-        Because mismatch is global on Cramp, linearity is unchanged; only overall
-        slope is shifted when mismatch is enabled.
+                selection_mode='tapped':
+                    - delay grows with selected tap index
+                    - power is constant because all stages are active and output is muxed
+
+                selection_mode='accumulated':
+                    - delay and power both grow with active stage count
+
+                Mismatch is global on Cramp, so only overall scaling changes.
         """
         cramp_eff = self._sample_cramp(mismatch_enable=mismatch_enable)
         n_axis = np.arange(1, self.n_replicas + 1, dtype=float)
 
         k_delay = ((self.vdd - self.vth) / self.ich) * cramp_eff
         k_power = cramp_eff * (self.vdd**2) * self.freq_hz
+        if self.self_power_down:
+            k_power = k_power / 4.0
 
         delay_s = k_delay * n_axis
-        power_w = k_power * n_axis
+        if self.selection_mode == "tapped":
+            power_w = np.full_like(n_axis, k_power * self.n_replicas)
+        else:
+            power_w = k_power * n_axis
 
         return {
             "N_axis": n_axis,

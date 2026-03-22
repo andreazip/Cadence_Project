@@ -42,6 +42,7 @@ CONFIG = {
     "f_hz": 100e6,
     "ich_constant": 0.22e-6,
     "ich_variable": 225e-6,
+    "self_power_down_variable": "no",  # "yes" or "no"
     "cramp": 1e-15,
     "c1": 0.323,
     "c2": -0.09,
@@ -84,6 +85,7 @@ def build_variable_sim(config, sigma_c, dac_mode, vdd_eff, vth_eff):
         i1=config["i1"],
         c1=config["c1"],
         c2=config["c2"],
+        self_power_down=config.get("self_power_down_variable", True),
     )
 
 

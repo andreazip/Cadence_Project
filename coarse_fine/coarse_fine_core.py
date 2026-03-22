@@ -80,6 +80,11 @@ class DTCConfig:
     # DTC slope type: 'constant' (CS), 'variable' (VS), or 'delay_line' (DL)
     slope_mode: str = "constant"
 
+    # Delay-line output selection behavior:
+    # - 'tapped': all stages are active; output tap is selected (constant power vs code)
+    # - 'accumulated': active stage count grows with code (power rises with code)
+    delay_line_selection_mode: str = "tapped"
+
     # Mode-dependent voltage scaling factors applied to both Vdd and Vth.
     vdd_vth_factor_constant: float = 2.0 / 3.0
     vdd_vth_factor_variable: float = 0.5
@@ -115,6 +120,10 @@ class DTCModel:
         self._slope_mode = self.config.slope_mode.strip().lower()
         if self._slope_mode not in {"constant", "variable", "delay_line"}:
             raise ValueError("slope_mode must be 'constant', 'variable', or 'delay_line'")
+
+        self._delay_line_selection_mode = str(self.config.delay_line_selection_mode).strip().lower()
+        if self._delay_line_selection_mode not in {"tapped", "accumulated"}:
+            raise ValueError("delay_line_selection_mode must be 'tapped' or 'accumulated'")
 
         # Mode-dependent supply scaling (configurable from runner-level CONFIG).
         self._supply_factor = (
@@ -255,7 +264,12 @@ class DTCModel:
             n_rep = float(code + 1)
             vst = 0.0
             cramp_nom = self._cramp_dl
-            energy = cramp_nom * self._vdd_eff**2 * n_rep
+            if self._delay_line_selection_mode == "tapped":
+                # Tapped line: all delay elements stay active; selected output tap changes delay only.
+                energy = cramp_nom * self._vdd_eff**2 * float(self.n_codes)
+            else:
+                # Accumulated line: number of active elements grows with code.
+                energy = cramp_nom * self._vdd_eff**2 * n_rep
 
         ich_eff = self.config.Ich
         cramp_eff = cramp_nom
