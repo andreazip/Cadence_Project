@@ -7,6 +7,9 @@ from pathlib import Path
 import sys
 import csv
 
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import numpy as np
 
 if __package__ is None or __package__ == "":
@@ -29,11 +32,15 @@ CONFIG = {
     # Voltage scaling applied directly to both Vdd and Vth:
     # - constant slope uses voltage_scale_factor_constant
     # - variable slope and delay-line use voltage_scale_factor_variable_delay_line
-    "voltage_scale_factor_constant": 0.5,
-    "voltage_scale_factor_variable_delay_line": 0.5,
+    "voltage_scale_factor_constant": 1,
+    "voltage_scale_factor_variable_delay_line": 1,
     "split_n_total": 11,
     "split_n_coarse_values": np.arange(2, 9),
     "include_delay_line_modes": True,
+    # Vdd sweep used for final optimization summary plots.
+    # For each Vdd and each mode configuration, we keep the best split
+    # (same criterion as the printed table) and plot P_max and P_avg.
+    "optimization_vdd_values": [1.1, 0.8, 0.55, 0.3],
     "coarse_values": {
         "n": 5,
         "Cu": 2e-15,
@@ -42,7 +49,7 @@ CONFIG = {
         "Ich" : 0.853e-6,
         #"Ich": 203.702e-9,
         "Cramp": 1e-15,
-        "Cramp_dl": 0.5e-15,  # Delay-line ramp capacitance (defaults to Cramp if omitted)
+        "Cramp_dl": 1e-15,  # Delay-line ramp capacitance (defaults to Cramp if omitted)
         "C_ramp_cu": 2e-15,  # VS CDAC unit capacitance (defaults to Cramp if omitted)
         "self_power_down": "yes",  # VS-only extra power reduction: "yes" or "no"
         "Ac": 5.218e-3,
@@ -59,7 +66,7 @@ CONFIG = {
         "f": 100e6,
         "Ich": 41.733e-6,
         "Cramp": 0.5e-15,
-        "Cramp_dl": 0.5e-15,  # Delay-line ramp capacitance (defaults to Cramp if omitted)
+        "Cramp_dl": 1e-15,  # Delay-line ramp capacitance (defaults to Cramp if omitted)
         "C_ramp_cu": 2e-15,  # VS CDAC unit capacitance (defaults to Cramp if omitted)
         "self_power_down": "yes",  # VS-only extra power reduction: "yes" or "no"
         "Ac": 5.218e-3,
@@ -70,6 +77,63 @@ CONFIG = {
         "delay_line_selection_mode": "tapped",  # "tapped" (constant power) or "accumulated" (rising power)
     },
 }
+
+
+def _plot_optimization_metric_vs_vdd(
+    records: list,
+    mode_configs: list,
+    vdd_values: list,
+    metric_key: str,
+    ylabel: str,
+    title: str,
+    save_path: str,
+) -> None:
+    """Plot one optimization metric versus Vdd for all mode configurations."""
+    fig, ax = plt.subplots(figsize=(11, 6))
+
+    colors = [
+        '#1F77B4', '#D62728', '#2CA02C', '#FF7F0E', '#8C564B',
+        '#17BECF', '#E377C2', '#7F7F7F', '#BCBD22',
+    ]
+
+    for idx, (cfg_label, _, _) in enumerate(mode_configs):
+        cfg_rows = [
+            r for r in records
+            if r["configuration"] == cfg_label and float(r["vdd"]) in [float(v) for v in vdd_values]
+        ]
+        cfg_rows = sorted(cfg_rows, key=lambda r: float(r["vdd"]))
+        if len(cfg_rows) == 0:
+            continue
+
+        x_vdd = [float(r["vdd"]) for r in cfg_rows]
+        y_metric = [float(r[metric_key]) * 1e6 for r in cfg_rows]
+
+        split_text = ", ".join(
+            f"{float(r['vdd']):.2f}V:{int(r['n_coarse'])}+{int(r['n_fine'])}"
+            for r in cfg_rows
+        )
+        label = f"{cfg_label} [{split_text}]"
+
+        ax.plot(
+            x_vdd,
+            y_metric,
+            marker='o',
+            markersize=6,
+            linewidth=2.2,
+            color=colors[idx % len(colors)],
+            label=label,
+        )
+
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=12)
+    ax.set_xlabel('Vdd [V]', fontsize=12, fontweight='bold')
+    ax.set_ylabel(ylabel, fontsize=12, fontweight='bold')
+    ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=9, framealpha=0.96, edgecolor='black', loc='best')
+    plt.tight_layout()
+    fig.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"Saved: {save_path}")
+    plt.close(fig)
 
 
 def main() -> None:
@@ -182,50 +246,66 @@ def main() -> None:
         ])
 
     best_rows = []
+    optimization_rows = []
+    optimization_vdd_values = [float(v) for v in CONFIG.get("optimization_vdd_values", [1.1, 0.8, 0.55])]
 
-    for cfg_label, coarse_mode, fine_mode in mode_configs:
-        cfg_coarse = dict(CONFIG["coarse_values"])
-        cfg_fine = dict(CONFIG["fine_values"])
-        cfg_coarse["slope_mode"] = coarse_mode
-        cfg_fine["slope_mode"] = fine_mode
+    for vdd_target in optimization_vdd_values:
+        print("\n" + "=" * 70)
+        print(f"Optimization at Vdd = {vdd_target:.3f} V")
+        print("=" * 70)
 
-        cfg_coarse = apply_mode_voltage_scaling(cfg_coarse)
-        cfg_fine = apply_mode_voltage_scaling(cfg_fine)
+        for cfg_label, coarse_mode, fine_mode in mode_configs:
+            cfg_coarse = dict(CONFIG["coarse_values"])
+            cfg_fine = dict(CONFIG["fine_values"])
+            cfg_coarse["slope_mode"] = coarse_mode
+            cfg_fine["slope_mode"] = fine_mode
 
-        for blk in (cfg_coarse, cfg_fine):
-            blk["vdd_vth_factor_variable"] = 1.0
-            blk["vdd_vth_factor_constant"] = 1.0
+            cfg_coarse["Vdd"] = float(vdd_target)
+            cfg_fine["Vdd"] = float(vdd_target)
+            if cfg_coarse.get("Vth") is not None:
+                cfg_coarse["Vth"] = float(vdd_target) / 2.0
+            if cfg_fine.get("Vth") is not None:
+                cfg_fine["Vth"] = float(vdd_target) / 2.0
 
-        split_results, best_split = optimize_split_loop(
-            n_total=int(CONFIG["split_n_total"]),
-            base_coarse_values=cfg_coarse,
-            base_fine_values=cfg_fine,
-            n_coarse_values=np.array(CONFIG["split_n_coarse_values"]),
-            max_delay_ns=max_delay_ns,
-            mc_runs=int(CONFIG["mc_runs"]),
-            dnl_limit_lsb=float(CONFIG["dnl_limit_lsb"]),
-            num_points_power=200,
-        )
+            cfg_coarse = apply_mode_voltage_scaling(cfg_coarse)
+            cfg_fine = apply_mode_voltage_scaling(cfg_fine)
 
-        print(f"\n[{cfg_label}] coarse={coarse_mode}, fine={fine_mode}")
-        print(f"{'n_coarse':<10} {'n_fine':<8} {'Ich_coarse (uA)':<16} {'Ich_fine (uA)':<14} {'P_avg (uW)':<14} {'P_max (uW)':<14} {'Pass <0.5LSB (%)':<18}")
-        print("-" * 110)
-        for row in split_results:
-            print(
-                f"{row['n_coarse']:<10d} "
-                f"{row['n_fine']:<8d} "
-                f"{row['ich_coarse_a']*1e6:<16.3f} "
-                f"{row['ich_fine_a']*1e6:<14.3f} "
-                f"{row['avg_total_power_w']*1e6:<14.3f} "
-                f"{row['max_total_power_w']*1e6:<14.3f} "
-                f"{row['pass_probability_percent']:<18.2f}"
+            for blk in (cfg_coarse, cfg_fine):
+                blk["vdd_vth_factor_variable"] = 1.0
+                blk["vdd_vth_factor_constant"] = 1.0
+
+            split_results, best_split = optimize_split_loop(
+                n_total=int(CONFIG["split_n_total"]),
+                base_coarse_values=cfg_coarse,
+                base_fine_values=cfg_fine,
+                n_coarse_values=np.array(CONFIG["split_n_coarse_values"]),
+                max_delay_ns=max_delay_ns,
+                mc_runs=int(CONFIG["mc_runs"]),
+                dnl_limit_lsb=float(CONFIG["dnl_limit_lsb"]),
+                num_points_power=200,
             )
 
-        best_entry = dict(best_split)
-        best_entry["configuration"] = cfg_label
-        best_entry["coarse_mode"] = coarse_mode
-        best_entry["fine_mode"] = fine_mode
-        best_rows.append(best_entry)
+            print(f"\n[{cfg_label}] coarse={coarse_mode}, fine={fine_mode}")
+            print(f"{'n_coarse':<10} {'n_fine':<8} {'Ich_coarse (uA)':<16} {'Ich_fine (uA)':<14} {'P_avg (uW)':<14} {'P_max (uW)':<14} {'Pass <0.5LSB (%)':<18}")
+            print("-" * 110)
+            for row in split_results:
+                print(
+                    f"{row['n_coarse']:<10d} "
+                    f"{row['n_fine']:<8d} "
+                    f"{row['ich_coarse_a']*1e6:<16.3f} "
+                    f"{row['ich_fine_a']*1e6:<14.3f} "
+                    f"{row['avg_total_power_w']*1e6:<14.3f} "
+                    f"{row['max_total_power_w']*1e6:<14.3f} "
+                    f"{row['pass_probability_percent']:<18.2f}"
+                )
+
+            best_entry = dict(best_split)
+            best_entry["configuration"] = cfg_label
+            best_entry["coarse_mode"] = coarse_mode
+            best_entry["fine_mode"] = fine_mode
+            best_entry["vdd"] = float(vdd_target)
+            best_rows.append(best_entry)
+            optimization_rows.append(best_entry)
 
     ranked = sorted(
         best_rows,
@@ -262,10 +342,33 @@ def main() -> None:
         f"P_max={winner['max_total_power_w']*1e6:.3f} uW"
     )
 
+    pmax_plot_path = out_path("coarse_fine_opt_pmax_vs_vdd.png")
+    _plot_optimization_metric_vs_vdd(
+        records=optimization_rows,
+        mode_configs=mode_configs,
+        vdd_values=optimization_vdd_values,
+        metric_key="max_total_power_w",
+        ylabel="Best P_max [uW]",
+        title="Best Split P_max vs Vdd by Configuration",
+        save_path=pmax_plot_path,
+    )
+
+    pavg_plot_path = out_path("coarse_fine_opt_pavg_vs_vdd.png")
+    _plot_optimization_metric_vs_vdd(
+        records=optimization_rows,
+        mode_configs=mode_configs,
+        vdd_values=optimization_vdd_values,
+        metric_key="avg_total_power_w",
+        ylabel="Best P_avg [uW]",
+        title="Best Split P_avg vs Vdd by Configuration",
+        save_path=pavg_plot_path,
+    )
+
     csv_path = out_path("coarse_fine_configuration_comparison.csv")
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
+            "vdd",
             "configuration",
             "coarse_mode",
             "fine_mode",
@@ -279,6 +382,7 @@ def main() -> None:
         ])
         for row in ranked:
             writer.writerow([
+                row.get("vdd", ""),
                 row["configuration"],
                 row["coarse_mode"],
                 row["fine_mode"],
@@ -291,6 +395,41 @@ def main() -> None:
                 row["pass_probability_percent"],
             ])
     print(f"Saved: {csv_path}")
+
+    csv_vdd_path = out_path("coarse_fine_best_per_config_per_vdd.csv")
+    with open(csv_vdd_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "vdd",
+            "configuration",
+            "coarse_mode",
+            "fine_mode",
+            "n_coarse",
+            "n_fine",
+            "ich_coarse_uA",
+            "ich_fine_uA",
+            "p_avg_uW",
+            "p_max_uW",
+            "pass_probability_percent",
+        ])
+        for row in sorted(
+            optimization_rows,
+            key=lambda r: (float(r["vdd"]), str(r["configuration"])),
+        ):
+            writer.writerow([
+                float(row["vdd"]),
+                row["configuration"],
+                row["coarse_mode"],
+                row["fine_mode"],
+                row["n_coarse"],
+                row["n_fine"],
+                row["ich_coarse_a"] * 1e6,
+                row["ich_fine_a"] * 1e6,
+                row["avg_total_power_w"] * 1e6,
+                row["max_total_power_w"] * 1e6,
+                row["pass_probability_percent"],
+            ])
+    print(f"Saved: {csv_vdd_path}")
 
 
 if __name__ == "__main__":

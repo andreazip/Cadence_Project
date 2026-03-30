@@ -28,7 +28,7 @@ CONFIG = {
         "CLM": False,
         "Non-linearities-capacitor": False,
     },
-    "n_bits": 11,
+    "n_bits": 5,
     "cu": 2e-15,
     "dac_mode": "binary",  # baseline mode for delay/power/summaries
     "segmented_thermo_bits": 4,
@@ -37,13 +37,13 @@ CONFIG = {
     "vdd": 1.1,
     "vth": 0.55,
     # Apply directly to Vdd and Vth in runner.
-    "voltage_scale_factor_constant": 2.0 / 3.0,
-    "voltage_scale_factor_variable": 0.5,
-    "f_hz": 100e6,
+    "voltage_scale_factor_constant": 1,
+    "voltage_scale_factor_variable": 1,
+    "f_hz": 66.67e6,
     "ich_constant": 0.22e-6,
-    "ich_variable": 225e-6,
-    "self_power_down_variable": "no",  # "yes" or "no"
-    "cramp": 1e-15,
+    "ich_variable": 6.9e-6,
+    "self_power_down_variable": "yes",  # "yes" or "no"
+    "cramp": 2e-15,
     "c1": 0.323,
     "c2": -0.09,
     "i1": 0.184,

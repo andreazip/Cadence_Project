@@ -61,8 +61,8 @@ def power_method(VDD, K_slope, C_load, k_lim, Cu0, res, NBITS, use_bit_extension
         Co_min = max(1 * Ca, Co_res)
         
         if C_load==0:
-            if T_DTC_max >10e-9:
-                T_list = np.linspace(10e-9, T_DTC_max, 200)
+            if T_DTC_max >5e-9:
+                T_list = np.linspace(5e-9, T_DTC_max, 200)
             else:
                 return {}  # No valid T_DTC range for zero load
         else:
@@ -266,8 +266,8 @@ def plot_optimal_frontier(ax, min_points, title="", mode_label=""):
 # ============================================================
 
 SAVE_DIR = Path("C:\\Users\\zipar\\OneDrive - Delft University of Technology\\Second Year\\MEP\\plots_optimization")
-VDD, K_slope, C_load, k_lim, Cu0, res, NBITS = 1.1, 380e6, 120e-15, 300e6, 44e-18, 5e-12, 11
-K_slopes = np.linspace(100e6, 300e6, 10)
+VDD, K_slope, C_load, k_lim, Cu0, res, NBITS = 0.55, 380e6, 120e-15, 300e6, 44e-18, 5e-12, 11
+K_slopes = np.linspace(10e6, 300e6, 10)
 
 k_lim_val = 1.0
 
