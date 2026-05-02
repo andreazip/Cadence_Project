@@ -74,6 +74,8 @@ class DTCConfig:
     C2: float = -0.09
     I1: float = 0.184
 
+    C_fixed: float = 0.0
+
     # DAC coding mode for the LSB capacitor network: 'binary' or 'thermometer'
     dac_mode: str = "binary"
 
@@ -89,7 +91,11 @@ class DTCConfig:
     vdd_vth_factor_constant: float = 2.0 / 3.0
     vdd_vth_factor_variable: float = 0.5
 
-    # Optional extra power reduction factor (divide by 4 when enabled) for VS and DL modes.
+    # Optional extra power reduction factor (divide by 4 when enabled), split by mode.
+    # If these are not provided, legacy `self_power_down` is used as fallback.
+    self_power_down_vs: Optional[Union[bool, str]] = None
+    self_power_down_dl: Optional[Union[bool, str]] = None
+    # Legacy unified switch kept for backward compatibility.
     self_power_down: Union[bool, str] = True
 
     # Mismatch parameters: sigma(Cu)/Cu = Ac/sqrt(A)
@@ -110,6 +116,7 @@ class DTCModel:
         # Delay-line ramp capacitance defaults to Cramp unless explicitly provided.
         self._cramp_dl = self.config.Cramp if self.config.Cramp_dl is None else self.config.Cramp_dl
 
+        
         # VS CDAC unit capacitance defaults to Cramp unless explicitly provided.
         self._vs_cdac_cu = self.config.Cramp if self.config.C_ramp_cu is None else self.config.C_ramp_cu
 
@@ -134,11 +141,17 @@ class DTCModel:
         self._vdd_eff = self.config.Vdd * self._supply_factor
         self._vth_eff = float(self.config.Vth) * self._supply_factor
 
-        spd = self.config.self_power_down
-        if isinstance(spd, str):
-            self._self_power_down = spd.strip().lower() in {"yes", "true", "1", "on"}
-        else:
-            self._self_power_down = bool(spd)
+        def _to_bool(value: Union[bool, str]) -> bool:
+            if isinstance(value, str):
+                return value.strip().lower() in {"yes", "true", "1", "on"}
+            return bool(value)
+
+        spd_fallback = self.config.self_power_down
+        spd_vs = self.config.self_power_down_vs
+        spd_dl = self.config.self_power_down_dl
+
+        self._self_power_down_vs = _to_bool(spd_vs if spd_vs is not None else spd_fallback)
+        self._self_power_down_dl = _to_bool(spd_dl if spd_dl is not None else spd_fallback)
 
         self._run_flags = {
             "CLM": self.config.enable_CLM,
@@ -202,6 +215,7 @@ class DTCModel:
             vth=self._vth_eff,
             ich=self.config.Ich,
             cramp_u=self._vs_cdac_cu,
+            C_fixed = self.config.C_fixed,
             i1=self.config.I1,
             c1=self.config.C1,
             c2=self.config.C2,
@@ -231,12 +245,12 @@ class DTCModel:
 
     def _compute_vst_cs(self, msb: int, c_k: float) -> float:
         if msb == 1:
-            return (1 + (self._ca - c_k) / (self._c0 + self._ca)) * self._vdd_eff
-        return (1 - c_k / (self._c0 + self._ca)) * self._vdd_eff
+            return (1 + (self._ca - c_k) / (self._c0 + self.config.Cramp + self._ca)) * self._vdd_eff
+        return (1 - c_k / (self._c0 + self.config.Cramp + self._ca)) * self._vdd_eff
 
-    def _compute_energy_cs(self, msb: int, c_k: float) -> float:
+    def _compute_energy_cs(self, msb: int, c_k: float, vst: float) -> float:
         if msb == 1:
-            return float(self._cs_core.energy_msb_1(self._ca, c_k, self._c0))
+            return float(self._cs_core.energy_msb_1(self._ca, c_k, self._c0, vst))
         return float(self._cs_core.energy_msb_0(c_k, self._c0, self._ca))
 
     def evaluate(self, code: int) -> Tuple[float, float]:
@@ -250,14 +264,14 @@ class DTCModel:
         if self._slope_mode == "constant":
             c_k = self._calc_ck_constant_slope(lsb_code)
             vst = self._compute_vst_cs(msb, c_k)
-            energy = self._compute_energy_cs(msb, c_k)
+            energy = self._compute_energy_cs(msb, c_k, vst)
             cramp_nom = self.config.Cramp
         elif self._slope_mode == "variable":
             # VS mode: one n-bit DAC controls effective ramp capacitance directly.
             c_k = self._calc_ck_variable_slope(code)
             # Use normalized code-dependent level for optional CLM/nonlinearity perturbation.
             vst = (c_k / max(self._ca, 1e-30)) * self._vdd_eff
-            energy = c_k * self._vdd_eff**2
+            energy = c_k * self._vdd_eff**2 + self.config.C_fixed * self._vdd_eff**2
             cramp_nom = c_k
         else:
             # Delay-line mode: code controls number of enabled replicas.
@@ -293,7 +307,9 @@ class DTCModel:
             delay = cramp_eff * (self._vdd_eff - self._vth_eff) / ich_eff * n_rep
         power = energy * self.config.f
 
-        if self._slope_mode in {"variable", "delay_line"} and self._self_power_down:
+        if self._slope_mode == "variable" and self._self_power_down_vs:
+            power = power / 4.0
+        elif self._slope_mode == "delay_line" and self._self_power_down_dl:
             power = power / 4.0
 
         return float(delay), float(power)
@@ -551,6 +567,7 @@ class CoarseFineDTC:
             'policy_boundary_violation_count': np.array([policy_meta['boundary_violation_count']], dtype=float),
         }
 
+    
     def synthesize_delay(self, target_delay_s: float, coarse_period_s: Optional[float] = None) -> Dict[str, float]:
         """
         Solve target delay with only coarse + fine DTC codes.
@@ -1209,6 +1226,9 @@ def run_mc_mismatch_analysis(
 
     return fig, (ax1, ax2), stats
 
+def calculate_current(td, J =0.8e-12, F = 0.1, q =1.6e-19):
+        "Calculate current based on jitter requirements considering shot noise."
+        return F*q*td/J**2
 
 def optimize_split_loop(
     n_total: int,
@@ -1236,7 +1256,21 @@ def optimize_split_loop(
         n_coarse_values = np.arange(2, n_total - 1)  # keep both blocks with enough points
 
     results = []
-    utilization = 0.78
+    utilization = 0.9
+
+    def _coarse_dac_cap_sum(values: Dict, n_bits_coarse: int) -> float:
+        """Return total CS DAC capacitance seen by the coarse block."""
+        c_array = values.get('C_array')
+        if c_array is not None:
+            return float(np.sum(np.array(c_array, dtype=float)))
+
+        bank_bits = max(int(n_bits_coarse) - 1, 0)
+        if bank_bits == 0:
+            return 0.0
+
+        cu = float(values['Cu'])
+        n_units = (2**bank_bits) - 1
+        return float(n_units * cu)
 
     for n_coarse in n_coarse_values:
         n_fine = int(n_total - n_coarse)
@@ -1259,7 +1293,11 @@ def optimize_split_loop(
             coarse_vth = coarse_values.get('Vth', coarse_values['Vdd'] / 2)
             coarse_values['Vth'] = coarse_vth
             k_slope_coarse = (coarse_vdd - coarse_vth) / res_coarse
-            coarse_values['Ich'] = k_slope_coarse * coarse_values['C_ramp_cu']
+            coarse_values['Ich'] = calculate_current(5e-9)
+            coarse_values['C_ramp_cu'] = coarse_values['Ich'] / k_slope_coarse
+            if coarse_values['C_ramp_cu'] < 2e-15:
+                coarse_values['C_ramp_cu'] = 2e-15 #for linearity
+                coarse_values['Ich'] = coarse_values['C_ramp_cu'] * k_slope_coarse #it will be greater than minimum value
             N_fine = 2**n_fine - 1
         elif coarse_is_dl:
             # Delay-line coarse scaling: delay step per replica is set by Cramp.
@@ -1267,8 +1305,12 @@ def optimize_split_loop(
             coarse_vth = coarse_values.get('Vth', coarse_values['Vdd'] / 2)
             coarse_values['Vth'] = coarse_vth
             k_slope_coarse = (coarse_vdd - coarse_vth) / res_coarse
-            coarse_cramp_dl = coarse_values.get('Cramp_dl', coarse_values['Cramp'])
-            coarse_values['Ich'] = k_slope_coarse * coarse_cramp_dl
+            coarse_values['Ich'] = calculate_current(5e-9)
+            coarse_values['Cramp_dl'] = coarse_values['Ich']/ k_slope_coarse
+            if coarse_values['Cramp_dl'] < 2e-15:
+                coarse_values['Cramp_dl'] = 2e-15 #for linearity
+                coarse_values['Ich'] = coarse_values['Cramp_dl'] * k_slope_coarse #it will be greater than minimum value
+            
             N_fine = 2**n_fine - 1
         else:
             coarse_codes = 2**n_coarse-2 #target number of coarse codes, can be adjusted as needed
@@ -1276,7 +1318,32 @@ def optimize_split_loop(
 
             # User-defined coarse current scaling law for CS coarse block.
             res_coarse = 5e-9/coarse_codes #the coarse resolution is given by the target range divided by the target number of coarse codes
-            coarse_values['Ich'] = (coarse_vdd / (res_coarse * ((2**n_coarse) - 2))) * coarse_values['Cramp']
+            k_slope_coarse = (coarse_vdd / (res_coarse * ((2**n_coarse) - 2)))
+
+            coarse_values['Ich'] = calculate_current(5e-9)
+            C_ramp = coarse_values['Ich'] / k_slope_coarse  
+            coarse_values['Cramp'] = C_ramp
+
+            c_sum = _coarse_dac_cap_sum(coarse_values, n_coarse)
+            cu_step = float(coarse_values.get('cu_increment', 1e-15))
+            if cu_step <= 0:
+                raise ValueError("cu_increment must be > 0 when enforcing Cramp/Csum rule")
+
+            # Enforce: if Cramp < Csum set C0 = Csum - Cramp; else increase Cu by one step.
+            if C_ramp >= c_sum:
+                if coarse_values.get('C_array') is not None:
+                    c_array = np.array(coarse_values['C_array'], dtype=float)
+                    while C_ramp >= c_sum:
+                        c_array = c_array + cu_step
+                        c_sum = float(np.sum(c_array))
+                    coarse_values['C_array'] = c_array
+                    coarse_values['Cu'] = float(np.min(c_array))
+                else:
+                    while C_ramp >= c_sum:
+                        coarse_values['Cu'] = float(coarse_values['Cu']) + cu_step
+                        c_sum = _coarse_dac_cap_sum(coarse_values, n_coarse)
+
+            coarse_values['C0'] = float(c_sum - C_ramp)
 
         fine_mode = str(fine_values.get('slope_mode', 'constant')).strip().lower()
         fine_is_vs = fine_mode == 'variable'
@@ -1291,7 +1358,14 @@ def optimize_split_loop(
             fine_values['Vth'] = fine_vth
             
             k_slope_fine = (fine_vdd- fine_vth) / res_fine
-            fine_values['Ich'] = k_slope_fine * fine_values['C_ramp_cu']
+            fine_values['Ich'] = calculate_current(res_coarse, J = 0.5e-12)
+            fine_values['C_ramp_cu'] = fine_values['Ich'] / k_slope_fine
+
+            if fine_values['C_ramp_cu'] < 2e-15:
+                fine_values['C_ramp_cu'] = 2e-15 #for linearity
+                fine_values['Ich'] = fine_values['C_ramp_cu'] * k_slope_fine #it will be greater than minimum value
+            
+            
         elif fine_is_dl:
             # Delay-line fine scaling: use replica-step delay set by Cramp.
             fine_codes = int(N_fine * utilization)
@@ -1301,14 +1375,52 @@ def optimize_split_loop(
             fine_values['Vth'] = fine_vth
 
             k_slope_fine = (fine_vdd - fine_vth) / res_fine
-            fine_cramp_dl = fine_values.get('Cramp_dl', fine_values['Cramp'])
-            fine_values['Ich'] = k_slope_fine * fine_cramp_dl
+            fine_values['Ich'] = calculate_current(res_coarse, J = 0.5e-12)
+            fine_values['Cramp_dl'] = fine_values['Ich'] / k_slope_fine
+
+            if fine_values['Cramp_dl'] < 2e-15:
+                fine_values['Cramp_dl'] = 2e-15 #for linearity
+                fine_values['Ich'] = fine_values['Cramp_dl'] * k_slope_fine #it will be greater than minimum value
+            
+
         else:
             fine_codes = int(N_fine * utilization) #target number of fine codes, can be adjusted as needed
 
             # User-defined fine current scaling law for CS fine block.
             res_fine = res_coarse/fine_codes #the fine resolution is given by the coarse resolution divided by the target number of fine codes
-            fine_values['Ich'] = (fine_vdd / (res_fine * ((2**n_fine) - 2))) * fine_values['Cramp']
+            k_slope_fine = (fine_vdd / (res_fine * ((2**n_fine) - 2)))
+
+            fine_values['Ich'] = calculate_current(res_coarse, J = 0.5e-12)
+            C_ramp = fine_values['Ich'] / k_slope_fine
+
+            if C_ramp < 2e-15:
+                C_ramp = 2e-15 #for linearity
+                fine_values['Ich'] = C_ramp * k_slope_fine #it will be greater than minimum value
+                
+            fine_values['Cramp'] = C_ramp
+
+
+           
+            c_sum = _coarse_dac_cap_sum(fine_values, n_fine)
+            cu_step = float(coarse_values.get('cu_increment', 1e-15))
+            if cu_step <= 0:
+                raise ValueError("cu_increment must be > 0 when enforcing Cramp/Csum rule")
+
+            # Enforce: if Cramp < Csum set C0 = Csum - Cramp; else increase Cu by one step.
+            if C_ramp >= c_sum:
+                if fine_values.get('C_array') is not None:
+                    c_array = np.array(fine_values['C_array'], dtype=float)
+                    while C_ramp >= c_sum:
+                        c_array = c_array + cu_step
+                        c_sum = float(np.sum(c_array))
+                    fine_values['C_array'] = c_array
+                    fine_values['Cu'] = float(np.min(c_array))
+                else:
+                    while C_ramp >= c_sum:
+                        fine_values['Cu'] = float(fine_values['Cu']) + cu_step
+                        c_sum = _coarse_dac_cap_sum(fine_values, n_fine)
+
+            fine_values['C0'] = float(c_sum - C_ramp)
 
         architecture = build_coarse_fine_dtc(coarse_values, fine_values)
 
@@ -1339,8 +1451,25 @@ def optimize_split_loop(
             'n_total': int(n_total),
             'n_coarse': int(n_coarse),
             'n_fine': int(n_fine),
+            'coarse_mode': coarse_mode,
+            'fine_mode': fine_mode,
             'ich_coarse_a': float(coarse_values['Ich']),
             'ich_fine_a': float(fine_values['Ich']),
+
+            # Coarse final params (all exported; display is mode-dependent in runner).
+            'cu_coarse_f': float(coarse_values.get('Cu', np.nan)),
+            'cramp_coarse_f': float(coarse_values.get('Cramp', np.nan)),
+            'c0_coarse_f': float(coarse_values.get('C0')) if coarse_values.get('C0') is not None else np.nan,
+            'cramp_cu_coarse_f': float(coarse_values.get('C_ramp_cu', np.nan)),
+            'cramp_dl_coarse_f': float(coarse_values.get('Cramp_dl', np.nan)),
+
+            # Fine final params (all exported; display is mode-dependent in runner).
+            'cu_fine_f': float(fine_values.get('Cu', np.nan)),
+            'cramp_fine_f': float(fine_values.get('Cramp', np.nan)),
+            'c0_fine_f': float(fine_values.get('C0')) if fine_values.get('C0') is not None else np.nan,
+            'cramp_cu_fine_f': float(fine_values.get('C_ramp_cu', np.nan)),
+            'cramp_dl_fine_f': float(fine_values.get('Cramp_dl', np.nan)),
+
             'avg_total_power_w': avg_power_w,
             'max_total_power_w': max_power_w,
             'pass_probability_percent': pass_prob,

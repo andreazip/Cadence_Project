@@ -56,6 +56,14 @@ def codes_without_middle(n_codes: int) -> np.ndarray:
     mid = (len(codes) - 1) // 2
     return np.delete(codes, mid)
 
+def codes_with_middle(n_codes: int) -> np.ndarray:
+    """Match coarse_fine_dtc._codes_without_middle convention."""
+    return  np.arange(n_codes - 1, dtype=int)
+
+def codes_with_middle(n_codes: int) -> np.ndarray:
+    """Match coarse_fine_dtc._codes_with_middle convention."""
+    return np.arange(n_codes-1, dtype=int)
+
 
 def split_into_coarse_blocks(y: np.ndarray, coarse_codes: int, fine_codes: int) -> list[np.ndarray]:
     """
@@ -106,14 +114,14 @@ def estimate_coarse_period(blocks: list[np.ndarray], coarse_active: np.ndarray, 
     return float(np.median(d))
 
 
-def build_fine_profile(blocks: list[np.ndarray], fine_codes: int) -> np.ndarray:
-    """Build a global fine-delay profile by median across coarse blocks per fine index."""
-    profile = np.full(fine_codes, np.nan, dtype=float)
-    for i in range(fine_codes):
-        vals = [float(b[i]) for b in blocks if i < len(b)]
-        if len(vals) > 0:
-            profile[i] = float(np.median(vals))
-    return profile
+# def build_fine_profile(blocks: list[np.ndarray], fine_codes: int) -> np.ndarray:
+#     """Build a global fine-delay profile by median across coarse blocks per fine index."""
+#     profile = np.full(fine_codes, np.nan, dtype=float)
+#     for i in range(fine_codes):
+#         vals = [float(b[i]) for b in blocks if i < len(b)]
+#         if len(vals) > 0:
+#             profile[i] = float(np.median(vals))
+#     return profile
 
 
 def block_start_indices(blocks: list[np.ndarray]) -> np.ndarray:
@@ -126,9 +134,9 @@ def block_start_indices(blocks: list[np.ndarray]) -> np.ndarray:
     return starts
 
 
-def fine_boundary_policy(blocks: list[np.ndarray], coarse_active: np.ndarray, fine_codes: int) -> tuple[np.ndarray, dict]:
+def fine_boundary_policy(remove, blocks: list[np.ndarray], coarse_active: np.ndarray, fine_codes: int) -> tuple[np.ndarray, dict]:
     """Mirror CoarseFineDTC._fine_boundary_policy on measured data."""
-    fine_idx_last = codes_without_middle(fine_codes)
+    fine_idx_last = codes_without_middle(fine_codes) if remove == True else codes_with_middle(fine_codes)
     coarse_period_s = estimate_coarse_period(blocks, coarse_active, fine_idx_last)
 
     fine_profile = build_fine_profile(blocks, fine_codes)
@@ -169,17 +177,19 @@ def combine_like_coarse_fine_dtc(
     coarse_codes: int,
     fine_codes: int,
     max_boundary_skip: int = -1,
+    remove: bool = False
 ):
     """
     New requested policy:
     - First coarse segment: keep all available fine points.
         - Each next coarse segment: start from the first point < previous - 0.5*LSB_local.
+        - Each next point must be >= previous - 0.45*LSB_local, otherwise skip more until this is satisfied.
       LSB_local is the average fine step magnitude in that coarse segment.
     """
-    coarse_active = codes_without_middle(coarse_codes)
-    fine_idx_last = codes_without_middle(fine_codes)
+    coarse_active = codes_without_middle(coarse_codes) if remove == True else codes_with_middle(coarse_codes)
+    fine_idx_last = codes_without_middle(fine_codes) if remove == True else codes_with_middle(fine_codes)
 
-    _, meta = fine_boundary_policy(blocks, coarse_active, fine_codes)
+    _, meta = fine_boundary_policy(remove, blocks, coarse_active, fine_codes)
 
     combined = []
     coarse_marker = []
@@ -221,9 +231,15 @@ def combine_like_coarse_fine_dtc(
 
         if c_local > 0 and len(combined) > 0 and len(fine_idx) > 0:
             prev_value = float(combined[-1])
-            threshold = prev_value - 0.5 * local_lsb
+            slope = True if combined[-1] - combined[-2] < 0 else False # If the last step was a decrease, we expect the next steps to be a decrease as well. This is a heuristic to handle non-monotonicities.
+            if slope:
+                threshold = prev_value - 0.5 * local_lsb
+                candidate_local = np.where(local_values <= threshold)[0]
+            else:
+                threshold = prev_value + 0.45 * local_lsb
+                candidate_local = np.where(local_values >= threshold)[0]
 
-            candidate_local = np.where(local_values < threshold)[0]
+            
             if len(candidate_local) == 0:
                 start_local = 0
                 boundary_no_solution_count += 1
@@ -292,6 +308,7 @@ def combine_like_coarse_fine_dtc(
         "boundary_no_solution_count": int(boundary_no_solution_count),
         "max_boundary_skip": int(max_boundary_skip),
         "boundary_details": boundary_details,
+        "remove": bool(remove),
     }
     info.update(meta)
 
@@ -490,7 +507,7 @@ def plot_results(delay: np.ndarray, coarse_marker: np.ndarray, dnl: np.ndarray, 
 
 def main():
     parser = argparse.ArgumentParser(description="Process CSV exactly like coarse_fine_dtc indexing/policy.")
-    parser.add_argument("--csv", default="results_cadence/delay_coarse_fine_10bits.csv")
+    parser.add_argument("--csv", default="results_cadence/delay_coarse_fine_13bits.csv")
     parser.add_argument(
         "--power-csvs",
         nargs="+",
@@ -508,6 +525,9 @@ def main():
         default=-1,
         help="Maximum skipped fine codes at each boundary (-1 means unlimited).",
     )
+    parser.add_argument(
+        "--remove", type=bool, default=False
+    )
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -524,6 +544,7 @@ def main():
         coarse_codes=args.coarse_codes,
         fine_codes=args.fine_codes,
         max_boundary_skip=args.max_boundary_skip,
+        remove=args.remove,
     )
 
     dnl, inl, lsb = compute_dnl_inl(delay)

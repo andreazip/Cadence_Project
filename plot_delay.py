@@ -282,7 +282,11 @@ class CadencePlotter:
         if 'counter' in fname:
             config = "Thermometric Counter"
         elif 'coarse' in fname:
-            config = "Coarse + Fine"
+            config = "Coarse"
+        elif 'fine' in fname:
+            config = "Fine"
+        elif 'coarse-fine' in fname:
+            config = "Coarse-Fine"
         elif 'nonidealcurs' in fname:
             config = "Non-Ideal Current Sources"
         elif 'mc' in fname:
@@ -657,17 +661,20 @@ class CadencePlotter:
         save_path = self._get_save_path(filename, "MC_Linearity", f"mcparamset_linearity_{len(sweeps)}")
         self._save_figure(fig, save_path)
 
-    def plot_average_power_by_code(self, filename, start_time=2e-8, window_size=5e-8, num_codes=256):
-        """Plot average power consumption by digital code, removing the code with maximum power.
+    def plot_average_power_by_code(self, filename, start_time=2e-8, window_size=5e-8, num_codes=256, remove_code=True, P_static = 0):
+        """Plot average power consumption by digital code.
         
-        Uses sliding window analysis to calculate average power for each code, then removes
-        the code with the highest power (peak detection).
+        Uses sliding window analysis to calculate average power for each code. By default,
+        the middle code is removed for cleaner visualization.
+        The plotted power is offset-corrected by subtracting static power at code 0.
         
         Args:
             filename: CSV file with transient power data (Time, Power columns)
             start_time: Start time for the analysis window (default: 2e-8 s)
             window_size: Duration of each code's time window (default: 5e-8 s)
             num_codes: Total number of codes to process (default: 256)
+            remove_code: If True, remove the middle code index and shift right side left by one
+            P_static: Static power to subtract (default: 0)
         """
         df, path = self.load_data(filename)
         if df is None:
@@ -702,23 +709,37 @@ class CadencePlotter:
             all_averages.append(avg_p)
             all_codes.append(i)
         
-        # Find and identify the code with maximum power
-        max_idx = num_codes//2 # Default to middle code if no data
-        max_code = all_codes[max_idx]
-        
-        # Filter out the max power code
-        plot_codes = []
+        # Static power offset from code 0.
+        ##static_power_w = float(all_averages[0]) if len(all_averages) > 0 else 0.0
+
+        # Remove middle code and shift all right-side codes one step left.
+        remove_idx = num_codes // 2 +1 if num_codes > 0 else None
+
         plot_averages = []
-        for i in range(num_codes):
-            if i != max_code:
-                plot_codes.append(all_codes[i])
+        if remove_code and remove_idx is not None:
+            for i in range(num_codes):
+                if i == remove_idx:
+                    continue
                 plot_averages.append(all_averages[i])
-        
+            # Re-index to contiguous codes after removal (right half shifts left by one).
+            plot_codes = list(range(len(plot_averages)))
+        else:
+            plot_averages = list(all_averages)
+            plot_codes = list(all_codes)
+
+        # Remove static power offset for plotting.
+        plot_averages_offset_w = np.array(plot_averages)  - P_static
         # Create publication-ready plot
         fig, ax = self._create_figure(figsize=(12, 7))
         
-        ax.plot(plot_codes, np.array(plot_averages) * 1e6, color=self.colors['primary'], 
-                linewidth=2.6, marker=None, label=f"Average Power (Code {max_code} removed)")
+        legend_label = (
+            f"Average Power - $P_{{static}}$, $P_{{static}}$={P_static * 1e6:.3f} uW"
+        )
+        if remove_code and remove_idx is not None:
+            legend_label += f", removed code {remove_idx}"
+
+        ax.plot(plot_codes, plot_averages_offset_w * 1e6, color=self.colors['primary'],
+                linewidth=2.6, marker=None, label=legend_label)
         
         thesis_title = self._get_thesis_title(filename, "sweep")
         clean_title = self._format_title(thesis_title)
@@ -1849,6 +1870,8 @@ class CadencePlotter:
                 start_time=kwargs.get("start_time", 2e-8),
                 window_size=kwargs.get("window_size", 5e-8),
                 num_codes=kwargs.get("num_codes", 256),
+                remove_code=kwargs.get("remove_code", True),
+                P_static=kwargs.get("P_static", 0),
             ),
             "corner_temp": lambda: self.plot_corner_temperature_sweep(filename),
             "corner_linearity": lambda: self.plot_corner_linearity_xy(filename),
@@ -2109,7 +2132,7 @@ def build_cli_parser():
     parser.add_argument("--task", action="append", help="Run a predefined task name (can repeat)")
     parser.add_argument("--all-tasks", action="store_true", help="Run all predefined tasks")
     parser.add_argument("--coarse-fine", action="store_true", help="Run coarse-fine processing flow")
-
+    parser.add_argument("--P-static", type=float, default=0, help="Static power to subtract (default: 0)")
     parser.add_argument("--max-realizations", type=int, default=200)
     parser.add_argument("--max-iterations", type=int, default=200)
     parser.add_argument("--lsb-ns", type=float, default=None)
@@ -2176,6 +2199,7 @@ def main():
     plotter.plot_file(
         args.file,
         plot_type=args.type,
+        P_static=args.P_static,
         max_realizations=args.max_realizations,
         max_iterations=args.max_iterations,
         lsb_ns=args.lsb_ns,

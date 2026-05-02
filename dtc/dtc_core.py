@@ -164,12 +164,12 @@ class ConstantSlopeDTC:
         raise ValueError("dac_mode must be 'binary', 'thermometer', or 'segmented'")
 
     def energy_msb_0(self, c_k, c0, ca):
-        return (c0 + (ca - c_k)) * (c_k / (c0 + ca)) * self.vdd**2
+        return (c0 + self.cramp  + (ca - c_k)) * (c_k / (c0 + self.cramp + ca)) * self.vdd**2  + self.cramp * (self.vdd/2)**2
 
-    def energy_msb_1(self, ca, c_k, c0):
-        return (ca - c_k) / (c0 + ca) * (c0 + c_k) * self.vdd**2
+    def energy_msb_1(self, ca, c_k, c0, Vst):
+        return (ca - c_k) / (c0 + self.cramp + ca) * (c0 + self.cramp + c_k) * self.vdd**2 + self.cramp * (Vst-(self.vdd/2))**2
 
-    def compute_vst_energy(self, cap_array, c0):
+    def compute_vst_energy(self, cap_array, c0, cramp):
         ca = np.sum(cap_array)
         vst_array = np.zeros(self.N)
         energy_array = np.zeros(self.N)
@@ -177,10 +177,10 @@ class ConstantSlopeDTC:
         for i in range(self.N):
             c_k = self.calc_ck(i, cap_array)
             if i > self.half:
-                vst_array[i] = (1 + (ca - c_k) / (c0 + ca)) * self.vdd
-                energy_array[i] = self.energy_msb_1(ca, c_k, c0)
+                vst_array[i] = (1 + (ca - c_k ) / (c0 + cramp + ca)) * self.vdd
+                energy_array[i] = self.energy_msb_1(ca, c_k, c0, vst_array[i])
             else:
-                vst_array[i] = (1 - c_k / (c0 + ca)) * self.vdd
+                vst_array[i] = (1 - (c_k) / (c0 + cramp + ca)) * self.vdd
                 energy_array[i] = self.energy_msb_0(c_k, c0, ca)
 
         return vst_array, energy_array, ca
@@ -233,6 +233,7 @@ class VariableSlopeDTC:
         i1,
         c1,
         c2,
+        C_fixed,
         self_power_down=True,
     ):
         self.n_bits = n_bits
@@ -249,6 +250,8 @@ class VariableSlopeDTC:
         self.i1 = i1
         self.c1 = c1
         self.c2 = c2
+        self.C_fixed = C_fixed
+
         if isinstance(self_power_down, str):
             self.self_power_down = self_power_down.strip().lower() in {"yes", "true", "1", "on"}
         else:
@@ -359,7 +362,7 @@ class VariableSlopeDTC:
             else:
                 cramp_array[i] = cramp_eff
 
-            delay[i] = cramp_eff * (self.vdd - self.vth) / ich_eff
+            delay[i] = self.cfixed *cramp_eff * (self.vdd - self.vth) / ich_eff
 
         return delay, ich_array, cramp_array, energy_array
 
@@ -589,16 +592,16 @@ def report_mismatch_stats(cap_array, ideal_array, name_prefix):
     )
 
 
-def run_constant_slope_simulation(sim, freq_hz, mismatch_enable, c0_factor, report_mismatch=True):
+def run_constant_slope_simulation(sim, freq_hz, mismatch_enable, cramp, c0_factor, report_mismatch=True):
     cap_array = sim.build_dac_array(mismatch_enable=mismatch_enable)
     if mismatch_enable and report_mismatch:
         ideal_array = sim.build_dac_array(mismatch_enable=False, sigma=0.0)
         report_mismatch_stats(cap_array, ideal_array, 'ConstantSlope DAC')
 
     ca = np.sum(cap_array)
-    c0 = c0_factor * ca
+    c0 = c0_factor*ca - cramp
 
-    vst_array, energy_array, _ = sim.compute_vst_energy(cap_array, c0)
+    vst_array, energy_array, _ = sim.compute_vst_energy(cap_array, c0, cramp)
     delay_array, ich_array, cramp_array = sim.compute_delay(vst_array)
 
     delay_trim = np.delete(delay_array, sim.half)
