@@ -439,40 +439,6 @@ class CoarseFineDTC:
             raise ValueError("No fine codes fall inside one coarse period")
         return valid
 
-    def _fine_boundary_policy(self, coarse_period_s: Optional[float]) -> Tuple[np.ndarray, bool]:
-        """
-        Determine regular fine indices and whether each new coarse segment starts at fine code 1.
-
-        Rule: if the residual gap to one coarse period is below res/2, keep the
-        last valid fine code and skip fine code 0 on subsequent coarse segments.
-        """
-        if coarse_period_s is None:
-            coarse_period_s = self._estimate_coarse_period()
-
-        fine_idx_regular = self._valid_fine_indices(coarse_period_s)
-
-        fine_codes = self._active_fine_codes()
-        fine_delays_active = self.fine_delays[fine_codes]
-        fine_min = float(np.min(fine_delays_active))
-        fine_span_active = fine_delays_active - fine_min
-
-        # Resolution is estimated as median positive step in active fine span.
-        fine_steps = np.diff(fine_span_active)
-        fine_steps = fine_steps[fine_steps > 0.0]
-        if len(fine_steps) == 0:
-            return fine_idx_regular, False
-        res_s = float(np.median(fine_steps))
-
-        fine_codes_set = set(int(c) for c in fine_idx_regular)
-        valid_mask = np.array([int(c) in fine_codes_set for c in fine_codes], dtype=bool)
-        valid_spans = fine_span_active[valid_mask]
-        if len(valid_spans) == 0:
-            return fine_idx_regular, False
-
-        residual_s = float(coarse_period_s - np.max(valid_spans))
-        start_next_from_code1 = bool(residual_s < 0.5 * res_s)
-        return fine_idx_regular, start_next_from_code1
-
     def _fine_indices_by_transition_policy(self) -> Tuple[np.ndarray, list[np.ndarray], Dict[str, float]]:
         """
         Build per-coarse selected fine indices using transition policy:
@@ -486,41 +452,68 @@ class CoarseFineDTC:
         fine_idx_all = self._active_fine_codes()
 
         selected: list[np.ndarray] = []
-        prev_last: Optional[float] = None
         boundary_skip_count = 0
         boundary_violation_count = 0
         boundary_no_solution_count = 0
+        prev_idx = np.array(fine_idx_all, dtype=int)
+        fine_idx = np.array(fine_idx_all, dtype=int)
+        
+        start_local = 0
+        end_previous = 0
+        prev_vals = + self.coarse_delays[0] + self.fine_delays[fine_idx]
+        
+        lsb = np.mean(np.abs(np.diff(prev_vals))) if len(prev_vals) > 1 else 0.0
 
-        for c_local, c_code in enumerate(coarse_codes):
-            fine_idx = np.array(fine_idx_all, dtype=int)
-            local_vals = self.coarse_delays[c_code] + self.fine_delays[fine_idx]
+        coarse_codes = coarse_codes[1:]
+       
+        for c_code in coarse_codes:
+        
+            candidate_local = np.array([], dtype=int)
+            local_vals = self.coarse_delays[c_code] + self.fine_delays[fine_idx]  
+        
+            iterate = True
 
-            if len(local_vals) > 1:
-                local_lsb = float(np.mean(np.abs(np.diff(local_vals))))
-            else:
-                local_lsb = 0.0
+            if c_code > 0 and len(local_vals) > 0:
+                for (i,p) in enumerate(prev_vals):
+                    if iterate:
+                        p = float(p)
+                        margin = local_vals - p
+                        
+                        candidate = np.where((margin >= 0.5 * lsb) & (margin <= 1.5 * lsb))[0]
+                        if len(candidate) > 0 and len(candidate_local) == 0:
+            
+                                end_previous = i
+                                candidate_local = candidate
+                                iterate = False
 
-            if c_local > 0 and prev_last is not None and len(local_vals) > 0:
-                threshold = float(prev_last + 0.5 * local_lsb)
-                candidate_local = np.where(local_vals > threshold)[0]
-                if len(candidate_local) == 0:
+                # if c_code == 1:
+                #     print(f"Coarse code {c_code}: candidate local indices {candidate_local}, lsb {lsb:.3e}, margin {margin[candidate_local]}, start {candidate_local[0] if len(candidate_local) > 0 else 'N/A'}, end{end_previous if len(candidate_local) > 0 else 'N/A'}")
+                #     print(f"prev_vals: {prev_vals[end_previous]}, start_next {local_vals[candidate_local[0]] if len(candidate_local) > 0 else 'N/A'}, margin = {prev_vals[end_previous] - local_vals[candidate_local[0]] if len(candidate_local) > 0 else 'N/A'}")
+                
+                if iterate:
+                    prev_value = prev_vals[-1]
+                    end_previous = len(prev_vals) - 1
                     start_local = 0
                     boundary_no_solution_count += 1
-                else:
-                    start_local = int(candidate_local[0])
+                    candidate_local = local_vals - (prev_value + lsb)
+                    start_local = np.argmin(np.abs(candidate_local))
+                else:    
+                    start_local = int(candidate_local[0]) 
 
-                boundary_skip_count += start_local
-                fine_idx = fine_idx[start_local:]
-                local_vals = local_vals[start_local:]
 
-                if len(local_vals) == 0 or local_vals[0] <= threshold:
-                    boundary_violation_count += 1
+            boundary_skip_count += start_local
+            fine_idx = fine_idx[start_local:]
+            local_vals = local_vals[start_local:]
+            prev_vals = prev_vals[:end_previous+1]
+            prev_idx = prev_idx[:end_previous+1]
 
-            if len(local_vals) > 0:
-                prev_last = float(local_vals[-1])
 
-            selected.append(fine_idx)
+            selected.append(prev_idx)
+            prev_idx = fine_idx
+            prev_vals = local_vals
 
+        selected.append(prev_idx)
+    
         meta = {
             "boundary_skip_count": float(boundary_skip_count),
             "boundary_violation_count": float(boundary_violation_count),
@@ -545,6 +538,8 @@ class CoarseFineDTC:
         coarse_markers = []
 
         code_counter = 0
+        coarse_codes = self._active_coarse_codes()
+
         for c_local, c_code in enumerate(coarse_codes):
             fine_idx = fine_idx_per_coarse[c_local]
             for local_i, f_code in enumerate(fine_idx):
@@ -1226,7 +1221,7 @@ def run_mc_mismatch_analysis(
 
     return fig, (ax1, ax2), stats
 
-def calculate_current(td, J =0.8e-12, F = 0.1, q =1.6e-19):
+def calculate_current(td, J =0.8e-12, F = 0.05, q =1.6e-19):
         "Calculate current based on jitter requirements considering shot noise."
         return F*q*td/J**2
 
@@ -1358,11 +1353,11 @@ def optimize_split_loop(
             fine_values['Vth'] = fine_vth
             
             k_slope_fine = (fine_vdd- fine_vth) / res_fine
-            fine_values['Ich'] = calculate_current(res_coarse, J = 0.5e-12)
+            fine_values['Ich'] = calculate_current(res_fine, J = 0.5e-12)
             fine_values['C_ramp_cu'] = fine_values['Ich'] / k_slope_fine
 
-            if fine_values['C_ramp_cu'] < 2e-15:
-                fine_values['C_ramp_cu'] = 2e-15 #for linearity
+            if fine_values['C_ramp_cu'] < 1e-15:
+                fine_values['C_ramp_cu'] = 1e-15 #for linearity
                 fine_values['Ich'] = fine_values['C_ramp_cu'] * k_slope_fine #it will be greater than minimum value
             
             
@@ -1375,11 +1370,11 @@ def optimize_split_loop(
             fine_values['Vth'] = fine_vth
 
             k_slope_fine = (fine_vdd - fine_vth) / res_fine
-            fine_values['Ich'] = calculate_current(res_coarse, J = 0.5e-12)
+            fine_values['Ich'] = calculate_current(res_fine, J = 0.5e-12)
             fine_values['Cramp_dl'] = fine_values['Ich'] / k_slope_fine
 
-            if fine_values['Cramp_dl'] < 2e-15:
-                fine_values['Cramp_dl'] = 2e-15 #for linearity
+            if fine_values['Cramp_dl'] < 1e-15:
+                fine_values['Cramp_dl'] = 1e-15 #for linearity
                 fine_values['Ich'] = fine_values['Cramp_dl'] * k_slope_fine #it will be greater than minimum value
             
 
@@ -1393,8 +1388,8 @@ def optimize_split_loop(
             fine_values['Ich'] = calculate_current(res_coarse, J = 0.5e-12)
             C_ramp = fine_values['Ich'] / k_slope_fine
 
-            if C_ramp < 2e-15:
-                C_ramp = 2e-15 #for linearity
+            if C_ramp < 1e-15:
+                C_ramp = 1e-15 #for linearity
                 fine_values['Ich'] = C_ramp * k_slope_fine #it will be greater than minimum value
                 
             fine_values['Cramp'] = C_ramp

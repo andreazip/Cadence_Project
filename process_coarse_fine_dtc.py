@@ -58,12 +58,7 @@ def codes_without_middle(n_codes: int) -> np.ndarray:
 
 def codes_with_middle(n_codes: int) -> np.ndarray:
     """Match coarse_fine_dtc._codes_without_middle convention."""
-    return  np.arange(n_codes - 1, dtype=int)
-
-def codes_with_middle(n_codes: int) -> np.ndarray:
-    """Match coarse_fine_dtc._codes_with_middle convention."""
-    return np.arange(n_codes-1, dtype=int)
-
+    return  np.arange(n_codes, dtype=int)
 
 def split_into_coarse_blocks(y: np.ndarray, coarse_codes: int, fine_codes: int) -> list[np.ndarray]:
     """
@@ -96,22 +91,22 @@ def split_into_coarse_blocks(y: np.ndarray, coarse_codes: int, fine_codes: int) 
     return blocks
 
 
-def estimate_coarse_period(blocks: list[np.ndarray], coarse_active: np.ndarray, fine_idx_last: np.ndarray) -> float:
-    """Estimate coarse period from adjacent coarse-code delays."""
-    coarse_delays = []
-    for c in coarse_active:
-        b = blocks[int(c)]
-        idx = fine_idx_last[fine_idx_last < len(b)]
-        if len(idx) == 0:
-            coarse_delays.append(float(np.min(b)))
-        else:
-            coarse_delays.append(float(np.min(b[idx])))
+# def estimate_coarse_period(blocks: list[np.ndarray], coarse_active: np.ndarray, fine_idx_last: np.ndarray) -> float:
+#     """Estimate coarse period from adjacent coarse-code delays."""
+#     coarse_delays = []
+#     for c in coarse_active:
+#         b = blocks[int(c)]
+#         idx = fine_idx_last[fine_idx_last < len(b)]
+#         if len(idx) == 0:
+#             coarse_delays.append(float(np.min(b)))
+#         else:
+#             coarse_delays.append(float(np.min(b[idx])))
 
-    d = np.abs(np.diff(np.asarray(coarse_delays, dtype=float)))
-    d = d[d > 0.0]
-    if len(d) == 0:
-        raise ValueError("Unable to estimate coarse period from data")
-    return float(np.median(d))
+#     d = np.abs(np.diff(np.asarray(coarse_delays, dtype=float)))
+#     d = d[d > 0.0]
+#     if len(d) == 0:
+#         raise ValueError("Unable to estimate coarse period from data")
+#     return float(np.median(d))
 
 
 # def build_fine_profile(blocks: list[np.ndarray], fine_codes: int) -> np.ndarray:
@@ -134,42 +129,41 @@ def block_start_indices(blocks: list[np.ndarray]) -> np.ndarray:
     return starts
 
 
-def fine_boundary_policy(remove, blocks: list[np.ndarray], coarse_active: np.ndarray, fine_codes: int) -> tuple[np.ndarray, dict]:
-    """Mirror CoarseFineDTC._fine_boundary_policy on measured data."""
-    fine_idx_last = codes_without_middle(fine_codes) if remove == True else codes_with_middle(fine_codes)
-    coarse_period_s = estimate_coarse_period(blocks, coarse_active, fine_idx_last)
+# def fine_boundary_policy(remove, blocks: list[np.ndarray], coarse_active: np.ndarray, fine_codes: int) -> tuple[np.ndarray, dict]:
+#     """Mirror CoarseFineDTC._fine_boundary_policy on measured data."""
+#     fine_idx_last = codes_without_middle(fine_codes) if remove == True else codes_with_middle(fine_codes)
+#     #coarse_period_s = estimate_coarse_period(blocks, coarse_active, fine_idx_last)
+#     #fine_profile = build_fine_profile(blocks, fine_codes)
+#     fine_codes_active = fine_idx_last[np.isfinite(fine_profile[fine_idx_last])]
+#     fine_delays_active = fine_profile[fine_codes_active]
+#     fine_min = float(np.min(fine_delays_active))
+#     fine_span_active = fine_delays_active - fine_min
 
-    fine_profile = build_fine_profile(blocks, fine_codes)
-    fine_codes_active = fine_idx_last[np.isfinite(fine_profile[fine_idx_last])]
-    fine_delays_active = fine_profile[fine_codes_active]
-    fine_min = float(np.min(fine_delays_active))
-    fine_span_active = fine_delays_active - fine_min
+#     # _valid_fine_indices equivalent
+#     valid_local = np.where((fine_span_active >= 0.0) & (fine_span_active <= coarse_period_s))[0]
+#     fine_idx_regular = fine_codes_active[valid_local]
 
-    # _valid_fine_indices equivalent
-    valid_local = np.where((fine_span_active >= 0.0) & (fine_span_active <= coarse_period_s))[0]
-    fine_idx_regular = fine_codes_active[valid_local]
+#     fine_codes_set = set(int(c) for c in fine_idx_regular)
+#     valid_mask = np.array([int(c) in fine_codes_set for c in fine_codes_active], dtype=bool)
+#     valid_spans = fine_span_active[valid_mask]
+#     if len(valid_spans) == 0:
+#         return fine_idx_regular, {
+#             "coarse_period_s": coarse_period_s,
+#             "resolution_s": 0.0,
+#             "residual_s": 0.0,
+#         }
 
-    fine_codes_set = set(int(c) for c in fine_idx_regular)
-    valid_mask = np.array([int(c) in fine_codes_set for c in fine_codes_active], dtype=bool)
-    valid_spans = fine_span_active[valid_mask]
-    if len(valid_spans) == 0:
-        return fine_idx_regular, {
-            "coarse_period_s": coarse_period_s,
-            "resolution_s": 0.0,
-            "residual_s": 0.0,
-        }
+#     fine_steps = np.diff(fine_span_active)
+#     fine_steps = fine_steps[fine_steps > 0.0]
+#     res_s = float(np.median(fine_steps)) if len(fine_steps) > 0 else 0.0
+#     residual_s = float(coarse_period_s - np.max(valid_spans))
 
-    fine_steps = np.diff(fine_span_active)
-    fine_steps = fine_steps[fine_steps > 0.0]
-    res_s = float(np.median(fine_steps)) if len(fine_steps) > 0 else 0.0
-    residual_s = float(coarse_period_s - np.max(valid_spans))
-
-    meta = {
-        "coarse_period_s": coarse_period_s,
-        "resolution_s": res_s,
-        "residual_s": residual_s,
-    }
-    return fine_idx_regular, meta
+#     meta = {
+#         "coarse_period_s": coarse_period_s,
+#         "resolution_s": res_s,
+#         "residual_s": residual_s,
+#     }
+#     return fine_idx_regular, meta
 
 
 def combine_like_coarse_fine_dtc(
@@ -177,7 +171,9 @@ def combine_like_coarse_fine_dtc(
     coarse_codes: int,
     fine_codes: int,
     max_boundary_skip: int = -1,
-    remove: bool = False
+    remove_coarse: bool = False,
+    remove_fine: bool = False,  
+    slope_negative: bool = False
 ):
     """
     New requested policy:
@@ -186,69 +182,103 @@ def combine_like_coarse_fine_dtc(
         - Each next point must be >= previous - 0.45*LSB_local, otherwise skip more until this is satisfied.
       LSB_local is the average fine step magnitude in that coarse segment.
     """
-    coarse_active = codes_without_middle(coarse_codes) if remove == True else codes_with_middle(coarse_codes)
-    fine_idx_last = codes_without_middle(fine_codes) if remove == True else codes_with_middle(fine_codes)
+    coarse_active = codes_without_middle(coarse_codes) if remove_coarse == True else codes_with_middle(coarse_codes)
+    fine_idx_last = codes_without_middle(fine_codes) if remove_fine == True else codes_with_middle(fine_codes)
 
-    _, meta = fine_boundary_policy(remove, blocks, coarse_active, fine_codes)
+    # _, meta = fine_boundary_policy(remove, blocks, coarse_active, fine_codes)
 
     combined = []
     coarse_marker = []
     coarse_codes_out = []
     fine_codes_out = []
     selected_input_indices = []
-
-    fine_profile = build_fine_profile(blocks, fine_codes)
-    if not np.any(np.isfinite(fine_profile)):
-        raise ValueError("Unable to build fine profile from blocks")
-    fine_profile_min = float(np.nanmin(fine_profile))
+    candidate_local = np.array([], dtype=int)
     boundary_skip_count = 0
     boundary_no_solution_count = 0
     boundary_violation_count = 0
     boundary_lsb_values = []
     boundary_margin_values = []
     boundary_details = []
+    previous_values = []
     starts = block_start_indices(blocks)
-    for c_local, c_code in enumerate(coarse_active):
-        block = blocks[int(c_code)]
-        # Use all available non-redundant fine points for this coarse code.
-        fine_idx = fine_idx_last
-        fine_idx = fine_idx[fine_idx < len(block)]
+    # Determine slope to know if we are looking for a value higher or lower
+    is_decreasing = slope_negative
 
-        coarse_base_now = float(np.min(block))
-        local_values = []
-        for fc in fine_idx:
-            fp = float(fine_profile[int(fc)])
-            if not np.isfinite(fp):
-                local_values.append(float(block[int(fc)]))
-            else:
-                local_values.append(coarse_base_now + (fp - fine_profile_min))
-        local_values = np.asarray(local_values, dtype=float)
+   
 
+    local_lsb = []
+    
+    for c in coarse_active:
+        block = blocks[int(c)] 
+        fine_idx = fine_idx_last[fine_idx_last < len(block)]
+
+        # 1) USE RAW DATA DIRECTLY
+        # Instead of building local_values from a profile, use the actual block data
+        local_values = block[fine_idx].astype(float)
         if len(local_values) > 1:
-            local_lsb = float(np.mean(np.abs(np.diff(local_values))))
+            local_lsb.append((local_values[-1] - local_values[0])/(len(local_values)-1))
         else:
             local_lsb = 0.0
+        
+    lsb = np.abs(float(np.mean(np.array(local_lsb))))
 
-        if c_local > 0 and len(combined) > 0 and len(fine_idx) > 0:
-            prev_value = float(combined[-1])
-            slope = True if combined[-1] - combined[-2] < 0 else False # If the last step was a decrease, we expect the next steps to be a decrease as well. This is a heuristic to handle non-monotonicities.
-            if slope:
-                threshold = prev_value - 0.5 * local_lsb
-                candidate_local = np.where(local_values <= threshold)[0]
-            else:
-                threshold = prev_value + 0.45 * local_lsb
-                candidate_local = np.where(local_values >= threshold)[0]
+     #configure the first fine block
+    block = blocks[int(coarse_active[0])]
+    previous_idx = fine_idx_last[fine_idx_last < len(block)]
+    previous_values = block[previous_idx].astype(float)
 
-            
-            if len(candidate_local) == 0:
+    coarse_active = coarse_active[1:]  # Start from the second coarse code since the first is fully included
+
+    for c_code in coarse_active:
+        candidate_local = np.array([], dtype=int)
+        iterate = True
+
+        block_prev = block
+        block = blocks[int(c_code)] 
+        fine_idx = fine_idx_last[fine_idx_last < len(block)]
+
+        # 1) USE RAW DATA DIRECTLY
+        # Instead of building local_values from a profile, use the actual block data
+        local_values = block[fine_idx].astype(float)
+
+        # 2) CONNECT USING HALF-LSB ERROR
+        if c_code > 0 and len(local_values) > 0 and len(fine_idx) > 0:
+            for (i,p) in enumerate(previous_values):
+                if iterate:
+                    p = float(p)
+                    if is_decreasing:
+                        margin = p - local_values
+                    else:
+                        margin = local_values - p
+                    
+                    candidate = np.where((margin >= 0.5 * lsb) & (margin <= 1.5 * lsb))[0]
+
+                    if len(candidate) > 0 and len(candidate_local) == 0 and candidate[0] > 3:
+                            prev_value = p
+                            end_previous = i
+                            candidate_local = candidate
+                            iterate = False
+
+            if iterate:
+                prev_value = previous_values[-1]
+                end_previous = len(previous_values) - 1
                 start_local = 0
                 boundary_no_solution_count += 1
-            else:
-                start_local = int(candidate_local[0])
-
+                print("I am here")
+                if is_decreasing:
+                    lsb = - lsb
+                candidate_local = local_values - (prev_value + lsb)
+                start_local = np.argmin(np.abs(candidate_local))
+            else:    
+                start_local = int(candidate_local[0]) 
+            
+           
             if max_boundary_skip >= 0:
                 start_local = min(start_local, max_boundary_skip)
 
+            #update the indices
+            previous_idx = previous_idx[:end_previous+1] 
+            previous_values = previous_values[:end_previous+1]
             fine_idx = fine_idx[start_local:]
             local_values = local_values[start_local:]
             boundary_skip_count += int(start_local)
@@ -259,21 +289,26 @@ def combine_like_coarse_fine_dtc(
                 next_first_value = float("nan")
             else:
                 next_first_value = float(local_values[0])
-                margin = float(next_first_value - threshold)
-                violates_after = bool(next_first_value >= threshold)
-
+                prev_value = float(previous_values[end_previous])
+                margin = float(next_first_value - prev_value) 
+                
+                if slope_negative:
+                    violates_after = bool((-margin < 0.5*lsb) or (-margin > 1.5*lsb))
+                else:
+                    violates_after = bool((margin < 0.5*lsb) or (margin > 1.5*lsb))
+                
             if violates_after:
                 boundary_violation_count += 1
+                print(f"Boundary violation after policy for coarse code {c_code}: next_first_value={next_first_value:.6e} violates previous value={prev_value:.6e} (margin={margin:.6e}).")
 
-            boundary_lsb_values.append(float(local_lsb))
+            boundary_lsb_values.append(float(lsb))
             boundary_margin_values.append(float(margin))
             boundary_details.append(
                 {
-                    "coarse_from": int(coarse_active[c_local - 1]),
+                    "coarse_from": int(c_code-1),
                     "coarse_to": int(c_code),
-                    "local_lsb": float(local_lsb),
+                    "local_lsb": float(lsb),
                     "previous_value": prev_value,
-                    "threshold": float(threshold),
                     "next_value_used": float(next_first_value),
                     "margin_after": float(margin),
                     "skips": int(start_local),
@@ -282,22 +317,30 @@ def combine_like_coarse_fine_dtc(
             )
 
         coarse_base = float(np.min(block))
-        for local_i, f_code in enumerate(fine_idx):
+        for local_i, f_code in enumerate(previous_idx):
 
-            fp = float(fine_profile[int(f_code)])
-            if not np.isfinite(fp):
-                # Fallback to measured point if profile is missing at this code.
-                value = float(block[int(f_code)])
-            else:
-                value = coarse_base + (fp - fine_profile_min)
-
+            value = float(block_prev[int(f_code)]) # Raw measurement
             combined.append(value)
             coarse_marker.append(local_i == 0)
-            coarse_codes_out.append(int(c_code))
+            coarse_codes_out.append(int(c_code-1))
             fine_codes_out.append(int(f_code))
-            selected_input_indices.append(int(starts[int(c_code)] + int(f_code)))
+            selected_input_indices.append(int(starts[int(c_code-1)] + int(f_code)))
+        
+        previous_idx = fine_idx
+        previous_values = local_values
+    
+    block = blocks[int(coarse_active[-1])]
+    
+    for local_i, f_code in enumerate(previous_idx):
+        value = float(block[int(f_code)]) # Raw measurement
+        combined.append(value)
+        coarse_marker.append(local_i == 0)
+        coarse_codes_out.append(int(c_code))
+        fine_codes_out.append(int(f_code))
+        selected_input_indices.append(int(starts[int(coarse_active[-1])] + int(f_code)))
 
-    info = {
+
+    meta = {
         "coarse_active_len": int(len(coarse_active)),
         "fine_regular_len": int(len(fine_idx_last)),
         "fine_last_len": int(len(fine_idx_last)),
@@ -308,9 +351,9 @@ def combine_like_coarse_fine_dtc(
         "boundary_no_solution_count": int(boundary_no_solution_count),
         "max_boundary_skip": int(max_boundary_skip),
         "boundary_details": boundary_details,
-        "remove": bool(remove),
+        "remove_coarse": bool(remove_coarse),
+        "remove_fine": bool(remove_fine),   
     }
-    info.update(meta)
 
     return (
         np.asarray(combined, dtype=float),
@@ -318,7 +361,7 @@ def combine_like_coarse_fine_dtc(
         np.asarray(coarse_codes_out),
         np.asarray(fine_codes_out),
         np.asarray(selected_input_indices, dtype=int),
-        info,
+        meta,
     )
 
 
@@ -328,6 +371,7 @@ def compute_dnl_inl(delay: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
         return np.array([]), np.array([]), 0.0
 
     lsb = float((delay[-1] - delay[0]) / (len(delay) - 1))
+
     if lsb == 0.0:
         return np.array([]), np.array([]), lsb
 
@@ -411,17 +455,18 @@ def compute_average_power_per_period(
     return avg_power
 
 
-def plot_selected_average_power(avg_power_w: np.ndarray, out_dir: Path) -> Path:
+def plot_selected_average_power(avg_power_w: np.ndarray, out_dir: Path, P_static: float) -> Path:
     """Plot average power across selected linearized coarse-fine codes."""
     if len(avg_power_w) > 1:
         # Remove the first plotted point to suppress the initial jump artifact.
-        avg_power_plot = avg_power_w[1:]
+        avg_power_plot = avg_power_w[1:] - P_static
     else:
-        avg_power_plot = avg_power_w
+        avg_power_plot = avg_power_w - P_static
 
     codes = np.arange(len(avg_power_plot))
     fig, ax = plt.subplots(figsize=(11, 4.8), constrained_layout=True)
     ax.plot(codes, avg_power_plot * 1e6, linewidth=1.8, color="#1F77B4")
+    ax.legend([P_static], title="Estimated static power", loc="upper left")
     ax.set_title("Average Power per 20 ns Execution (Linearized Coarse-Fine Codes)")
     ax.set_xlabel("Linearized combined code")
     ax.set_ylabel("Average power [uW]")
@@ -511,7 +556,8 @@ def main():
     parser.add_argument(
         "--power-csvs",
         nargs="+",
-        default=["results_cadence/power_coarse_fine_1.csv", "results_cadence/power_coarse_fine_2.csv"],
+        default=["results_cadence/power_coarse_fine/power_coarse_fine_13bits_1.csv"],
+        #   "results_cadence/power_coarse_fine/power_coarse_fine_13bits_2.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_3.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_4.csv",    "results_cadence/power_coarse_fine/power_coarse_fine_13bits_5.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_6.csv" , "results_cadence/power_coarse_fine/power_coarse_fine_13bits_7.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_8.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_9.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_10.csv"],
         help="Ordered power transient CSVs; traces are processed sequentially in this order.",
     )
     parser.add_argument("--out-dir", default=str(SAVE_DIR))
@@ -526,8 +572,17 @@ def main():
         help="Maximum skipped fine codes at each boundary (-1 means unlimited).",
     )
     parser.add_argument(
-        "--remove", type=bool, default=False
+        "--remove-coarse", type=bool, default=False
     )
+    parser.add_argument(
+        "--remove-fine", type=bool, default=False
+    )
+    parser.add_argument(
+        "--slope-negative", type=bool, default=False, help="Set to True if the delay characteristic is expected to decrease with increasing code."
+    )
+    parser.add_argument(
+        "--static-power-uw", type=float, default=0.0, help="Estimated static power in microwatts to subtract from the average power plot.")
+    
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
@@ -544,7 +599,9 @@ def main():
         coarse_codes=args.coarse_codes,
         fine_codes=args.fine_codes,
         max_boundary_skip=args.max_boundary_skip,
-        remove=args.remove,
+        remove_coarse=args.remove_coarse,
+        remove_fine=args.remove_fine,
+        slope_negative=args.slope_negative,
     )
 
     dnl, inl, lsb = compute_dnl_inl(delay)
@@ -558,6 +615,14 @@ def main():
 
     unique_coarse, coarse_counts = np.unique(coarse_codes_out, return_counts=True)
     coarse_count_map = {int(c): int(n) for c, n in zip(unique_coarse, coarse_counts)}
+    first_fine_per_coarse: dict[int, int] = {}
+    last_fine_per_coarse: dict[int, int] = {}
+    for c, f in zip(coarse_codes_out, fine_codes_out):
+        c_i = int(c)
+        f_i = int(f)
+        if c_i not in first_fine_per_coarse:
+            first_fine_per_coarse[c_i] = f_i
+        last_fine_per_coarse[c_i] = f_i
 
     with combined_path.open("w", encoding="utf-8") as f:
         json.dump(delay.tolist(), f, indent=2)
@@ -601,6 +666,8 @@ def main():
         {
             "coarse_code": unique_coarse.astype(int),
             "n_codes": coarse_counts.astype(int),
+            "first_fine_code": [first_fine_per_coarse.get(int(c), -1) for c in unique_coarse],
+            "last_fine_code": [last_fine_per_coarse.get(int(c), -1) for c in unique_coarse],
         }
     ).to_csv(coarse_counts_csv_path, index=False)
 
@@ -641,7 +708,7 @@ def main():
         }
     ).to_csv(avg_power_csv_path, index=False)
 
-    avg_power_plot = plot_selected_average_power(avg_power_selected, out_dir)
+    avg_power_plot = plot_selected_average_power(avg_power_selected, out_dir, P_static=args.static_power_uw * 1e-6)
 
     print(f"Input points: {len(y)}")
     print(f"Blocks: {len(blocks)}")

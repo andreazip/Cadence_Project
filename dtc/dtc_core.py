@@ -163,11 +163,11 @@ class ConstantSlopeDTC:
 
         raise ValueError("dac_mode must be 'binary', 'thermometer', or 'segmented'")
 
-    def energy_msb_0(self, c_k, c0, ca):
-        return (c0 + self.cramp  + (ca - c_k)) * (c_k / (c0 + self.cramp + ca)) * self.vdd**2  + self.cramp * (self.vdd/2)**2
+    def energy_msb_0(self, c_k, c0, ca, Vst):
+        return (c0 + self.cramp  + (ca - c_k)) * (c_k / (c0 + self.cramp + ca)) * self.vdd**2  + self.cramp * (Vst**2-self.vdd*Vst + self.vdd**2)
 
     def energy_msb_1(self, ca, c_k, c0, Vst):
-        return (ca - c_k) / (c0 + self.cramp + ca) * (c0 + self.cramp + c_k) * self.vdd**2 + self.cramp * (Vst-(self.vdd/2))**2
+        return (ca - c_k) / (c0 + self.cramp + ca) * (c0 + self.cramp + c_k) * self.vdd**2 + self.cramp * (Vst**2-self.vdd*Vst + self.vdd**2)
 
     def compute_vst_energy(self, cap_array, c0, cramp):
         ca = np.sum(cap_array)
@@ -181,7 +181,7 @@ class ConstantSlopeDTC:
                 energy_array[i] = self.energy_msb_1(ca, c_k, c0, vst_array[i])
             else:
                 vst_array[i] = (1 - (c_k) / (c0 + cramp + ca)) * self.vdd
-                energy_array[i] = self.energy_msb_0(c_k, c0, ca)
+                energy_array[i] = self.energy_msb_0(c_k, c0, ca, vst_array[i])
 
         return vst_array, energy_array, ca
 
@@ -362,7 +362,7 @@ class VariableSlopeDTC:
             else:
                 cramp_array[i] = cramp_eff
 
-            delay[i] = self.cfixed *cramp_eff * (self.vdd - self.vth) / ich_eff
+            delay[i] = self.C_fixed *cramp_eff * (self.vdd - self.vth) / ich_eff
 
         return delay, ich_array, cramp_array, energy_array
 

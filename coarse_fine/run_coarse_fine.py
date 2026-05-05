@@ -48,9 +48,8 @@ CONFIG = {
         "Vdd": 1.1,
         "f": 50e6,
         "Ich" : 62.5e-6,
-        #"Ich": 203.702e-9,
-        "Cramp": 120e-15,
-        "Cramp_dl": 2e-15,  # Delay-line ramp capacitance (defaults to Cramp if omitted)
+        "Cramp": 1e-15,
+        "Cramp_dl": 2.228e-15,  # Delay-line ramp capacitance (defaults to Cramp if omitted)
         "C_ramp_cu": 2.228e-15,  # VS CDAC unit capacitance (defaults to Cramp if omitted)
         "self_power_down_vs": "yes",  # VS extra power reduction: "yes" or "no"
         "self_power_down_dl": "no",  # DL extra power reduction: "yes" or "no"
@@ -60,27 +59,27 @@ CONFIG = {
         "dac_mode": "binary", #binary or thermometer or segmented
         "slope_mode": "variable",  # "constant" (CS), "variable" (VS), or "delay_line" (DL)
         "delay_line_selection_mode": "tapped",  # "tapped" (constant power) or "accumulated" (rising power)
-        "C_fixed": 10e-15
+        "C_fixed": 30e-15
     },
     "fine_values": {
         "n": 5,
-        "Cu": 2e-15,
+        "Cu": 1e-15,
         "Vdd": 1.1,
-        "f": 100e6,
-        "Ich": 100.98e-6,
-        "Cramp": 2e-15,
+        "f": 50e6,
+        "Ich": 50.49e-6,
+        "Cramp": 1e-15,
         "Cramp_dl": 1e-15,  # Delay-line ramp capacitance (defaults to Cramp if omitted)
-        "C_ramp_cu": 2e-15,  # VS CDAC unit capacitance (defaults to Cramp if omitted)
+        "C_ramp_cu": 1.7e-15,  # VS CDAC unit capacitance (defaults to Cramp if omitted)
         "self_power_down_vs": "yes",  # VS extra power reduction: "yes" or "no"
         "self_power_down_dl": "no",  # DL extra power reduction: "yes" or "no"
         "Ac": 5.218e-3,
-        "A": 3.5,
-        "C0":28e-15,
+        "A": 2,
+        "C0":14e-15,
         "C0_scale": 1,
         "dac_mode": "binary",
         "slope_mode": "constant",  # "constant" (CS), "variable" (VS), or "delay_line" (DL)
         "delay_line_selection_mode": "tapped",  # "tapped" (constant power) or "accumulated" (rising power)
-        "C_fixed": 0
+        "C_fixed": 10e-15
     },
 }
 
@@ -213,9 +212,6 @@ def main() -> None:
     architecture.plot_single_block_characteristic('fine', save_path=out_path('fine_only_delay_vs_code.png'))
     architecture.plot_single_block_nonlinearity('fine', save_path=out_path('fine_only_dnl_inl.png'))
 
-    ch_all = architecture.combined_characteristic()
-    code_last = len(ch_all['combined_code']) - 1
-    code_mid = code_last // 2
 
     # architecture.plot_phase_noise(
     #     codes=[0, code_mid, code_last],
