@@ -8,44 +8,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from dtc.dtc_core import ConstantSlopeDTC, DelayLineDTC, VariableSlopeDTC, compute_sigma_c
+from plot_style import apply_science_style, _multi_panel_figsize
 
-# ===== PUBLICATION-READY PLOT STYLE (matching DTC_simulation.py) =====
-matplotlib.rcParams['font.family'] = 'sans-serif'
-matplotlib.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
 
-plt.rcParams.update({
-    "font.size": 11,
-    "axes.titlesize": 14,
-    "axes.labelsize": 12,
-    "xtick.labelsize": 10,
-    "ytick.labelsize": 10,
-    "legend.fontsize": 10,
-    "figure.figsize": (10, 6),
-    "lines.linewidth": 2.6,
-    "lines.markersize": 4,
-    "lines.markeredgewidth": 1.0,
-    "grid.alpha": 0.6,
-    "grid.color": "#b7b7b7",
-    "grid.linestyle": "--",
-    "grid.linewidth": 1.2,
-    "figure.dpi": 100,
-    "savefig.dpi": 300,
-    "savefig.bbox": "tight",
-    "savefig.pad_inches": 0.05,
-    "axes.linewidth": 1.6,
-    "axes.edgecolor": "black",
-    "axes.facecolor": "white",
-    "xtick.major.width": 1.4,
-    "xtick.minor.width": 1.0,
-    "ytick.major.width": 1.4,
-    "ytick.minor.width": 1.0,
-    "xtick.direction": "in",
-    "ytick.direction": "in",
-    "legend.frameon": True,
-    "legend.framealpha": 0.96,
-    "legend.edgecolor": "black",
-    "legend.fancybox": False,
-})
+apply_science_style()
 
 
 @dataclass
@@ -133,13 +99,9 @@ class DTCModel:
             raise ValueError("delay_line_selection_mode must be 'tapped' or 'accumulated'")
 
         # Mode-dependent supply scaling (configurable from runner-level CONFIG).
-        self._supply_factor = (
-            self.config.vdd_vth_factor_variable
-            if self._slope_mode in {"variable", "delay_line"}
-            else self.config.vdd_vth_factor_constant
-        )
-        self._vdd_eff = self.config.Vdd * self._supply_factor
-        self._vth_eff = float(self.config.Vth) * self._supply_factor
+
+
+        self._vth_eff = float(self.config.Vth) 
 
         def _to_bool(value: Union[bool, str]) -> bool:
             if isinstance(value, str):
@@ -189,6 +151,8 @@ class DTCModel:
 
         sigma_c_cs = compute_sigma_c(self.config.Ac, self.config.A, self.config.Cu)
         sigma_c_vs = compute_sigma_c(self.config.Ac, self.config.A, self._vs_cdac_cu)
+        sigma_c_dl = compute_sigma_c(self.config.Ac, self.config.A, self._cramp_dl)
+
         self._cs_core = ConstantSlopeDTC(
             n_bits=self.config.n,
             cu=self.config.Cu,
@@ -196,7 +160,7 @@ class DTCModel:
             thermo_bits=4,
             run_flags=self._run_flags,
             sigma_c=sigma_c_cs,
-            vdd=self._vdd_eff,
+            vdd=self.config.Vdd ,
             vth=self._vth_eff,
             ich=self.config.Ich,
             cramp=self.config.Cramp,
@@ -211,7 +175,7 @@ class DTCModel:
             thermo_bits=4,
             run_flags=self._run_flags,
             sigma_c=sigma_c_vs,
-            vdd=self._vdd_eff,
+            vdd=self.config.Vdd ,
             vth=self._vth_eff,
             ich=self.config.Ich,
             cramp_u=self._vs_cdac_cu,
@@ -220,7 +184,19 @@ class DTCModel:
             c1=self.config.C1,
             c2=self.config.C2,
         )
-
+        self._dl_core = DelayLineDTC(
+            n_bits=self.config.n,
+            run_flags=self._run_flags,
+            sigma_cramp= sigma_c_dl,
+            vdd=self.config.Vdd ,
+            vth=self._vth_eff,
+            ich=self.config.Ich,
+            cramp=self._cramp_dl,
+            i1=self.config.I1,
+            c1=self.config.C1,
+            c2=self.config.C2,
+        )
+        
         # Align code-space with dtc_core convention: N = 2^n - 1.
         self.n_codes = (2 ** self.config.n) - 1
 
@@ -245,20 +221,22 @@ class DTCModel:
 
     def _compute_vst_cs(self, msb: int, c_k: float) -> float:
         if msb == 1:
-            return (1 + (self._ca - c_k) / (self._c0 + self.config.Cramp + self._ca)) * self._vdd_eff
-        return (1 - c_k / (self._c0 + self.config.Cramp + self._ca)) * self._vdd_eff
+            return (1 + (self._ca - c_k) / (self._c0 + self.config.Cramp + self._ca)) * self.config.Vdd
+        return (1 - c_k / (self._c0 + self.config.Cramp + self._ca)) * self.config.Vdd
 
     def _compute_energy_cs(self, msb: int, c_k: float, vst: float) -> float:
         if msb == 1:
             return float(self._cs_core.energy_msb_1(self._ca, c_k, self._c0, vst))
-        return float(self._cs_core.energy_msb_0(c_k, self._c0, self._ca))
+        return float(self._cs_core.energy_msb_0(c_k, self._c0, self._ca, vst))
 
     def evaluate(self, code: int) -> Tuple[float, float]:
         """Return (delay_s, power_w) for a single digital code."""
         if code < 0 or code >= self.n_codes:
             raise ValueError(f"Code must be in [0, {self.n_codes - 1}]")
-
+        
+        #just using half code for the range extension method
         lsb_code = code & ((2 ** (self.config.n - 1)) - 1)
+        
         msb = (code >> (self.config.n - 1)) & 1
 
         if self._slope_mode == "constant":
@@ -269,42 +247,41 @@ class DTCModel:
         elif self._slope_mode == "variable":
             # VS mode: one n-bit DAC controls effective ramp capacitance directly.
             c_k = self._calc_ck_variable_slope(code)
+            vst = self.config.Vdd
             # Use normalized code-dependent level for optional CLM/nonlinearity perturbation.
-            vst = (c_k / max(self._ca, 1e-30)) * self._vdd_eff
-            energy = c_k * self._vdd_eff**2 + self.config.C_fixed * self._vdd_eff**2
+            energy = c_k * self.config.Vdd**2 + self.config.C_fixed * self.config.Vdd**2
             cramp_nom = c_k
         else:
             # Delay-line mode: code controls number of enabled replicas.
             n_rep = float(code + 1)
-            vst = 0.0
             cramp_nom = self._cramp_dl
-            if self._delay_line_selection_mode == "tapped":
-                # Tapped line: all delay elements stay active; selected output tap changes delay only.
-                energy = cramp_nom * self._vdd_eff**2 * float(self.n_codes)
-            else:
-                # Accumulated line: number of active elements grows with code.
-                energy = cramp_nom * self._vdd_eff**2 * n_rep
+            vst = self.config.Vdd
+            # Tapped line: all delay elements stay active; selected output tap changes delay only.
+            energy = cramp_nom * self.config.Vdd**2 * float(self.n_codes)
+            
 
         ich_eff = self.config.Ich
         cramp_eff = cramp_nom
 
-        if self._slope_mode != "delay_line" and self.config.enable_CLM:
+        if self.config.enable_CLM:
             ich_eff = self.config.Ich * (1 + self.config.I1 * (vst - 0.4))
 
-        if self._slope_mode != "delay_line" and self.config.enable_nonlin:
+        if self.config.enable_nonlin:
             cramp_eff = cramp_nom * (1 + self.config.C1 * vst + self.config.C2 * vst**2)
 
         if ich_eff == 0:
             raise ValueError("Ich effective value is zero; cannot compute delay")
 
         if self._slope_mode == "constant":
-            k_eff = -ich_eff / cramp_eff
-            delay = (self._vth_eff - vst) / k_eff
+            k_eff = ich_eff / cramp_eff
+            delay = (vst - self._vth_eff) / k_eff
         elif self._slope_mode == "variable":
-            delay = cramp_eff * (self._vdd_eff - self._vth_eff) / ich_eff
+            offset = self.config.C_fixed * (self.config.Vdd - self._vth_eff) / ich_eff
+            K_eff = ich_eff / c_k if c_k > 0 else 0
+            delay = offset + (self.config.Vdd - self._vth_eff) / K_eff if K_eff > 0 else offset
         else:
             n_rep = float(code + 1)
-            delay = cramp_eff * (self._vdd_eff - self._vth_eff) / ich_eff * n_rep
+            delay = cramp_eff * (self.config.Vdd - self._vth_eff) / ich_eff * n_rep
         power = energy * self.config.f
 
         if self._slope_mode == "variable" and self._self_power_down_vs:
@@ -460,11 +437,12 @@ class CoarseFineDTC:
         
         start_local = 0
         end_previous = 0
-        prev_vals = + self.coarse_delays[0] + self.fine_delays[fine_idx]
+        prev_vals = self.coarse_delays[0] + self.fine_delays[fine_idx]
         
         lsb = np.mean(np.abs(np.diff(prev_vals))) if len(prev_vals) > 1 else 0.0
 
         coarse_codes = coarse_codes[1:]
+
        
         for c_code in coarse_codes:
         
@@ -478,10 +456,10 @@ class CoarseFineDTC:
                     if iterate:
                         p = float(p)
                         margin = local_vals - p
-                        
                         candidate = np.where((margin >= 0.5 * lsb) & (margin <= 1.5 * lsb))[0]
+
                         if len(candidate) > 0 and len(candidate_local) == 0:
-            
+
                                 end_previous = i
                                 candidate_local = candidate
                                 iterate = False
@@ -513,23 +491,23 @@ class CoarseFineDTC:
             prev_vals = local_vals
 
         selected.append(prev_idx)
-    
+        coarse_codes = np.insert(coarse_codes, 0, 0)
         meta = {
             "boundary_skip_count": float(boundary_skip_count),
             "boundary_violation_count": float(boundary_violation_count),
             "boundary_no_solution_count": float(boundary_no_solution_count),
         }
+        
         return coarse_codes, selected, meta
 
-    def combined_characteristic(self, coarse_period_s: Optional[float] = None) -> Dict[str, np.ndarray]:
+    def combined_characteristic(self, coarse_period_s: Optional[float] = None, coarse_codes: np.ndarray = None, fine_idx_per_coarse: list = None, policy_meta: Dict[str, float] = None) -> Dict[str, np.ndarray]:
         """
         Return coarse-fine characteristic with rollover at one coarse period.
 
         For each coarse code, fine codes inside one coarse period are used,
         except for the last coarse segment where the full fine range is allowed.
         """
-        coarse_codes, fine_idx_per_coarse, policy_meta = self._fine_indices_by_transition_policy()
-
+        
         combined_codes = []
         total_delays = []
         total_powers = []
@@ -538,8 +516,7 @@ class CoarseFineDTC:
         coarse_markers = []
 
         code_counter = 0
-        coarse_codes = self._active_coarse_codes()
-
+        
         for c_local, c_code in enumerate(coarse_codes):
             fine_idx = fine_idx_per_coarse[c_local]
             for local_i, f_code in enumerate(fine_idx):
@@ -563,7 +540,7 @@ class CoarseFineDTC:
         }
 
     
-    def synthesize_delay(self, target_delay_s: float, coarse_period_s: Optional[float] = None) -> Dict[str, float]:
+    def synthesize_delay(self, target_delay_s: float, coarse_idx : np.ndarray, fine_idx_per_coarse: list) -> Dict[str, float]:
         """
         Solve target delay with only coarse + fine DTC codes.
 
@@ -573,8 +550,7 @@ class CoarseFineDTC:
         if target_delay_s < 0:
             raise ValueError("target_delay_s must be >= 0")
 
-        coarse_idx, fine_idx_per_coarse, _ = self._fine_indices_by_transition_policy()
-
+    
         candidates = []
         for coarse_local, coarse_code in enumerate(coarse_idx):
             fine_idx = fine_idx_per_coarse[coarse_local]
@@ -604,8 +580,8 @@ class CoarseFineDTC:
             "p_total_w": float(p_coarse + p_fine),
         }
 
-    def sweep_target_delays(self, target_delays_s: np.ndarray, coarse_period_s: Optional[float] = None) -> Dict[str, np.ndarray]:
-        """Evaluate coarse+fine synthesis on a vector of target delays."""
+    def sweep_target_delays(self, architecture, target_delays_s: np.ndarray, coarse_period_s: Optional[float] = None) -> Dict[str, np.ndarray]:
+        """Evaluate coarse + fine synthesis on a vector of target delays."""
         targets = np.array(target_delays_s, dtype=float)
 
         total_delays = np.zeros_like(targets)
@@ -614,8 +590,10 @@ class CoarseFineDTC:
         coarse_codes = np.zeros_like(targets, dtype=int)
         fine_codes = np.zeros_like(targets, dtype=int)
 
+        coarse_idx, fine_idx_per_coarse, policy_meta = architecture._fine_indices_by_transition_policy()
+  
         for i, t in enumerate(targets):
-            r = self.synthesize_delay(float(t), coarse_period_s=coarse_period_s)
+            r = self.synthesize_delay(float(t), coarse_idx=coarse_idx, fine_idx_per_coarse=fine_idx_per_coarse)
             total_delays[i] = r['total_delay_s']
             errors[i] = r['error_s']
             p_totals[i] = r['p_total_w']
@@ -680,9 +658,10 @@ class CoarseFineDTC:
         t_range_ns: Optional[float] = None,
         coarse_period_s: Optional[float] = None,
         save_path: Optional[str] = None,
+        ch: Dict[str, np.ndarray] = None,
+        policy_meta: Dict[str, float] = None,
     ):
         """Plot coarse-fine characteristic (total delay vs combined code)."""
-        ch = self.combined_characteristic(coarse_period_s=coarse_period_s)
         codes = ch['combined_code']
         delays_ns = ch['total_delay_s'] * 1e9
         coarse_marker = ch['coarse_marker']
@@ -730,18 +709,14 @@ class CoarseFineDTC:
         avg_over_target_range_ns: Optional[float] = None,
         avg_num_points: int = 200,
         save_path: Optional[str] = None,
+        ch: Dict[str, np.ndarray] = None,
     ):
         """Plot total power vs combined code over full non-redundant code range."""
-        ch = self.combined_characteristic(coarse_period_s=coarse_period_s)
+
         codes = ch['combined_code']
         powers_uw = ch['total_power_w'] * 1e6
 
-        if avg_over_target_range_ns is not None:
-            target_delays_s = np.linspace(0.0, float(avg_over_target_range_ns) * 1e-9, int(avg_num_points))
-            sweep = self.sweep_target_delays(target_delays_s, coarse_period_s=coarse_period_s)
-            p_avg_uw = float(np.mean(sweep['p_total_w']) * 1e6)
-        else:
-            p_avg_uw = float(np.mean(powers_uw)) if len(powers_uw) > 0 else 0.0
+        p_avg_uw = float(np.mean(powers_uw)) if len(powers_uw) > 0 else 0.0
 
         fig, ax = plt.subplots(figsize=(11, 6))
         ax.plot(
@@ -1124,8 +1099,6 @@ def run_mc_mismatch_analysis(
     coarse_values: Dict,
     fine_values: Dict,
     mc_runs: int = 200,
-    delay_range_ns: float = 10.0,
-    num_points: int = 150,
     dnl_limit_lsb: float = 0.5,
     t_range_ns: Optional[float] = None,
     save_path: Optional[str] = None,
@@ -1150,7 +1123,8 @@ def run_mc_mismatch_analysis(
             coarse=coarse_nom.with_cap_mismatch(rng),
             fine=fine_nom.with_cap_mismatch(rng),
         )
-        ch = arch_mc.combined_characteristic()
+        coarse_idx, fine_idx_per_coarse, policy_meta = arch_mc._fine_indices_by_transition_policy()
+        ch = arch_mc.combined_characteristic(coarse_codes=coarse_idx, fine_idx_per_coarse=fine_idx_per_coarse, policy_meta=policy_meta)
         delays_s = ch['total_delay_s']
         codes = ch['combined_code']
 
@@ -1420,7 +1394,7 @@ def optimize_split_loop(
         architecture = build_coarse_fine_dtc(coarse_values, fine_values)
 
         target_delays_s = np.linspace(0.0, max_delay_ns * 1e-9, num_points_power)
-        sweep = architecture.sweep_target_delays(target_delays_s)
+        sweep = architecture.sweep_target_delays(architecture, target_delays_s)
         avg_power_w = float(np.mean(sweep['p_total_w']))
         max_power_w = float(np.max(sweep['p_total_w']))
 

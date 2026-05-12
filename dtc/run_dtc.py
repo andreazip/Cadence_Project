@@ -7,7 +7,6 @@ from dtc.dtc_core import (
     ConstantSlopeDTC,
     VariableSlopeDTC,
     compute_sigma_c,
-    configure_plot_style,
     lsb_from_curve,
     plot_aux_effects,
     plot_delay_power,
@@ -16,6 +15,7 @@ from dtc.dtc_core import (
     run_constant_slope_simulation,
     run_variable_slope_simulation,
 )
+from plot_style import apply_science_style
 
 
 # ---------------------------
@@ -45,7 +45,8 @@ CONFIG = {
     "ich_variable": 6.9e-6,
     "divide_ich_by_c0_factor": True,
     "self_power_down_variable": "yes",  # "yes" or "no"
-    "cramp": 120e-15,
+    "cramp": 2e-15,
+    "cramp_u": 2e-15,  # Only used for variable slope DAC. If not provided, "cramp" value will be used.
     "c1": 0.323,
     "c2": -0.09,
     "i1": 0.184,
@@ -85,7 +86,7 @@ def build_variable_sim(config, sigma_c, dac_mode, vdd_eff, vth_eff):
         vdd=vdd_eff,
         vth=vth_eff,
         ich=config["ich_variable"],
-        cramp_u=config["cramp"],
+        cramp_u=config["cramp_u"],
         i1=config["i1"],
         c1=config["c1"],
         c2=config["c2"],
@@ -95,7 +96,7 @@ def build_variable_sim(config, sigma_c, dac_mode, vdd_eff, vth_eff):
 
 
 def main():
-    configure_plot_style()
+    apply_science_style()
 
     save_path = CONFIG["save_dir"] / CONFIG["plot_folder"]
     save_path.mkdir(parents=True, exist_ok=True)
@@ -150,10 +151,9 @@ def main():
 
         var_results = run_variable_slope_simulation(
             sim=sim_var,
-            vst_array=const_results["vst_array_full"],
+            vst_array=np.full(2**CONFIG["n_bits"] - 1, CONFIG["vdd"]),
             freq_hz=CONFIG["f_hz"],
             mismatch_enable=CONFIG["run_flags"]["DAC_mismatch"],
-            remove_index=None,
         )
 
         power_sweep_cs.append(
@@ -230,12 +230,12 @@ def main():
                     c0_factor=c0_factor,
                     report_mismatch=False,
                 )
+                
                 vs_mc = run_variable_slope_simulation(
                     sim=sim_var_mc,
-                    vst_array=cs_mc["vst_array_full"],
+                    vst_array=np.full(2**CONFIG["n_bits"] - 1, CONFIG["vdd"]),
                     freq_hz=CONFIG["f_hz"],
                     mismatch_enable=True,
-                    remove_index=None,
                     report_mismatch=False,
                 )
                 mc_cs.append(cs_mc["delay_array"])

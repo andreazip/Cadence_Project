@@ -3,6 +3,11 @@ import numpy as np
 import re
 import matplotlib.pyplot as plt
 
+from plot_style import apply_science_style
+
+
+apply_science_style()
+
 # 1. Load the file
 df = pd.read_csv('results_cadence\cap_data.csv')
 

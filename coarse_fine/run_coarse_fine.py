@@ -12,6 +12,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
+from plot_style import apply_science_style
+
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -22,11 +24,14 @@ from coarse_fine.coarse_fine_core import (
 )
 
 
+apply_science_style()
+
+
 CONFIG = {
     "save_dir": Path(
         r"C:\Users\zipar\OneDrive - Delft University of Technology\Second Year\MEP\python simulation\coarse_fine_python"
     ),
-    "max_delay_ns": 6.0,
+    "max_delay_ns": 8.0,
     "mc_runs": 100,
     "dnl_limit_lsb": 0.5,
     # Voltage scaling applied directly to both Vdd and Vth:
@@ -40,22 +45,23 @@ CONFIG = {
     # Vdd sweep used for final optimization summary plots.
     # For each Vdd and each mode configuration, we keep the best split
     # (same criterion as the printed table) and plot P_max and P_avg.
-    "optimization_vdd_values": [0.55, 0.88, 1.1],
+    "optimization_vdd_values": [0.55, 0.88,1.1],
     "optimization": False,
     "coarse_values": {
         "n": 8,
         "Cu": 2e-15,
         "Vdd": 1.1,
+        "Vth":0.55,
         "f": 50e6,
         "Ich" : 62.5e-6,
-        "Cramp": 1e-15,
+        "Cramp": 284e-15,
         "Cramp_dl": 2.228e-15,  # Delay-line ramp capacitance (defaults to Cramp if omitted)
-        "C_ramp_cu": 2.228e-15,  # VS CDAC unit capacitance (defaults to Cramp if omitted)
+        "C_ramp_cu":2.228e-15,  # VS CDAC unit capacitance (defaults to Cramp if omitted)
         "self_power_down_vs": "yes",  # VS extra power reduction: "yes" or "no"
         "self_power_down_dl": "no",  # DL extra power reduction: "yes" or "no"
         "Ac": 5.218e-3,
-        "A": 3.5,
-        "C0": 8e-15,
+        "A": 7,
+        "C0": 30.9e-15,
         "dac_mode": "binary", #binary or thermometer or segmented
         "slope_mode": "variable",  # "constant" (CS), "variable" (VS), or "delay_line" (DL)
         "delay_line_selection_mode": "tapped",  # "tapped" (constant power) or "accumulated" (rising power)
@@ -65,6 +71,7 @@ CONFIG = {
         "n": 5,
         "Cu": 1e-15,
         "Vdd": 1.1,
+        "Vth":0.55,
         "f": 50e6,
         "Ich": 50.49e-6,
         "Cramp": 1e-15,
@@ -147,22 +154,7 @@ def main() -> None:
 
     def out_path(name: str) -> str:
         return str(save_dir / name)
-
-    def apply_mode_voltage_scaling(values: dict) -> dict:
-        mode = str(values.get("slope_mode", "constant")).strip().lower()
-        scale_constant = float(CONFIG["voltage_scale_factor_constant"])
-        scale_var_dl = float(CONFIG["voltage_scale_factor_variable_delay_line"])
-        scale = scale_constant if mode == "constant" else scale_var_dl
-
-        out = dict(values)
-        out["Vdd"] = float(out["Vdd"]) * scale
-        if out.get("Vth") is not None:
-            out["Vth"] = float(out["Vth"]) * scale
-        return out
-
-    coarse_values = apply_mode_voltage_scaling(dict(CONFIG["coarse_values"]))
-    fine_values = apply_mode_voltage_scaling(dict(CONFIG["fine_values"]))
-
+    
     def mode_param_text(mode: str, row: dict, prefix: str) -> str:
         mode_key = str(mode).strip().lower()
         ich_ua = float(row.get(f"ich_{prefix}_a", np.nan)) * 1e6
@@ -178,15 +170,19 @@ def main() -> None:
         return f"Cramp={cramp_ff:.3f} fF, C0={c0_ff:.3f} fF, Ich={ich_ua:.3f} uA"
 
 
-    # Keep internal mode-dependent scaling neutral so runner values are used as-is.
-    for blk in (coarse_values, fine_values):
-        blk["vdd_vth_factor_variable"] = 1.0
-        blk["vdd_vth_factor_constant"] = 1.0
+    coarse_values = dict(CONFIG["coarse_values"])
+    fine_values = dict(CONFIG["fine_values"])
+
 
     architecture = build_coarse_fine_dtc(coarse_values, fine_values)
 
+    #Try to produce a certain taget delay
     target_ns = 5.0
-    result = architecture.synthesize_delay(target_ns * 1e-9)
+
+    coarse_idx, fine_idx_per_coarse, policy_meta = architecture._fine_indices_by_transition_policy()
+    print(f"Coarse indices: {type(coarse_idx)}")
+    print(f"Fine indices per coarse: {type(fine_idx_per_coarse)}")
+    result = architecture.synthesize_delay(target_ns * 1e-9, coarse_idx=coarse_idx, fine_idx_per_coarse=fine_idx_per_coarse)
 
     print("Coarse-Fine DTC result")
     print("-" * 50)
@@ -198,13 +194,10 @@ def main() -> None:
     print(f"Total power : {result['p_total_w'] * 1e6:.3f} uW")
 
     max_delay_ns = float(CONFIG["max_delay_ns"])
-
-    architecture.plot_characteristic_vs_code(t_range_ns=max_delay_ns, save_path=out_path('coarse_fine_delay_vs_code.png'))
-    architecture.plot_power_vs_code(
-        avg_over_target_range_ns=max_delay_ns,
-        avg_num_points=200,
-        save_path=out_path('coarse_fine_power_vs_code.png'),
-    )
+    ch = architecture.combined_characteristic(coarse_period_s=max_delay_ns*1e-9, coarse_codes=coarse_idx, fine_idx_per_coarse=fine_idx_per_coarse, policy_meta=policy_meta)
+    
+    architecture.plot_characteristic_vs_code(t_range_ns=max_delay_ns, save_path=out_path('coarse_fine_delay_vs_code.png'), ch=ch, policy_meta=policy_meta)
+    architecture.plot_power_vs_code(avg_over_target_range_ns=max_delay_ns, avg_num_points=200, save_path=out_path('coarse_fine_power_vs_code.png'), ch =ch)
 
     architecture.plot_single_block_characteristic('coarse', save_path=out_path('coarse_only_delay_vs_code.png'))
     architecture.plot_single_block_nonlinearity('coarse', save_path=out_path('coarse_only_dnl_inl.png'))
@@ -213,30 +206,10 @@ def main() -> None:
     architecture.plot_single_block_nonlinearity('fine', save_path=out_path('fine_only_dnl_inl.png'))
 
 
-    # architecture.plot_phase_noise(
-    #     codes=[0, code_mid, code_last],
-    #     num_samples=2**14,
-    #     nperseg=1024,
-    #     temperature_k=100e-3,
-    #     seed=42,
-    #     save_path=out_path('coarse_fine_phase_noise.png'),
-    # )
-
-    # sigma_from_target = architecture.max_sigma_jitter_tolerated_from_lf(
-    #     l_dbc_hz=-100.0,
-    #     integration_bw_hz=100e6,
-    # )
-    # print(
-    #     f"Max tolerated sigma_jitter from flat L(f)=-100 dBc/Hz over 1 MHz: "
-    #     f"{sigma_from_target*1e12:.3f} ps"
-    # )
-
     _, _, mc_stats = run_mc_mismatch_analysis(
         coarse_values=coarse_values,
         fine_values=fine_values,
         mc_runs=int(CONFIG["mc_runs"]),
-        delay_range_ns=max_delay_ns,
-        num_points=120,
         dnl_limit_lsb=float(CONFIG["dnl_limit_lsb"]),
         t_range_ns=max_delay_ns,
         save_path=out_path('coarse_fine_mc_mismatch.png'),
@@ -244,6 +217,7 @@ def main() -> None:
     print(f"Probability of staying below {CONFIG['dnl_limit_lsb']:.1f} LSB = {mc_stats['pass_probability_percent']:.2f}%")
 
     optimization = CONFIG.get("optimization", False)   # Set to False to skip the optimization loop and just run the main characterization.
+    
     if optimization:
         print("\n" + "=" * 70)
         print("Split Optimization Loop - Mode Configurations")
@@ -286,12 +260,6 @@ def main() -> None:
                 if cfg_fine.get("Vth") is not None:
                     cfg_fine["Vth"] = float(vdd_target) / 2.0
 
-                cfg_coarse = apply_mode_voltage_scaling(cfg_coarse)
-                cfg_fine = apply_mode_voltage_scaling(cfg_fine)
-
-                for blk in (cfg_coarse, cfg_fine):
-                    blk["vdd_vth_factor_variable"] = 1.0
-                    blk["vdd_vth_factor_constant"] = 1.0
 
                 split_results, best_split = optimize_split_loop(
                     n_total=int(CONFIG["split_n_total"]),

@@ -5,54 +5,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
 
-# ===== PUBLICATION-READY PLOT STYLE =====
-matplotlib.rcParams['font.family'] = 'sans-serif'
-matplotlib.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
+from plot_style import apply_science_style
 
-plt.rcParams.update({
-    # Font sizes
-    "font.size": 11,
-    "axes.titlesize": 14,
-    "axes.labelsize": 12,
-    "xtick.labelsize": 10,
-    "ytick.labelsize": 10,
-    "legend.fontsize": 10,
-    "figure.figsize": (10, 6),
-    
-    # Line and marker styles
-    "lines.linewidth": 2.6,
-    "lines.markersize": 4,
-    "lines.markeredgewidth": 1.0,
-    
-    # Grid
-    "grid.alpha": 0.6,
-    "grid.color": "#b7b7b7",
-    "grid.linestyle": "--",
-    "grid.linewidth": 1.2,
-    
-    # Figure
-    "figure.dpi": 100,
-    "savefig.dpi": 300,
-    "savefig.bbox": "tight",
-    "savefig.pad_inches": 0.05,
-    
-    # Axes
-    "axes.linewidth": 1.6,
-    "axes.edgecolor": "black",
-    "axes.facecolor": "white",
-    "xtick.major.width": 1.4,
-    "xtick.minor.width": 1.0,
-    "ytick.major.width": 1.4,
-    "ytick.minor.width": 1.0,
-    "xtick.direction": "in",
-    "ytick.direction": "in",
-    
-    # Legend
-    "legend.frameon": True,
-    "legend.framealpha": 0.96,
-    "legend.edgecolor": "black",
-    "legend.fancybox": False,
-})
+
+apply_science_style()
 
 def power_method(VDD, K_slope, C_load, k_lim, Cu0, res, NBITS):
     P_dict = {}

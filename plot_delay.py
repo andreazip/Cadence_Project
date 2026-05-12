@@ -6,6 +6,8 @@ import numpy as np
 import argparse
 from pathlib import Path
 
+from plot_style import apply_science_style
+
 # ============================================================================
 # QUICK CLI CHEATSHEET (run from project root)
 # ============================================================================
@@ -25,57 +27,7 @@ from pathlib import Path
 #   --base-dir results_cadence --plot-dir plots
 #   --max-realizations 200 --max-iterations 200
 
-# ============================================================================
-# PUBLICATION-READY PLOT STYLE
-# ============================================================================
-# Set font for scientific publications - Arial is universally available
-matplotlib.rcParams['font.family'] = 'sans-serif'
-matplotlib.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
-
-plt.rcParams.update({
-    # Font sizes
-    "font.size": 11,
-    "axes.titlesize": 14,
-    "axes.labelsize": 12,
-    "xtick.labelsize": 10,
-    "ytick.labelsize": 10,
-    "legend.fontsize": 10,
-    "figure.figsize": (10, 6),
-    
-    # Line and marker styles
-    "lines.linewidth": 2.6,
-    "lines.markersize": 4,
-    "lines.markeredgewidth": 1.0,
-    
-    # Grid (match reference style)
-    "grid.alpha": 0.6,
-    "grid.color": "#b7b7b7",
-    "grid.linestyle": "--",
-    "grid.linewidth": 1.2,
-    
-    # Figure
-    "figure.dpi": 100,
-    "savefig.dpi": 300,  # High resolution for saving
-    "savefig.bbox": "tight",
-    "savefig.pad_inches": 0.05,
-    
-    # Axes
-    "axes.linewidth": 1.6,
-    "axes.edgecolor": "black",
-    "axes.facecolor": "white",
-    "xtick.major.width": 1.4,
-    "xtick.minor.width": 1.0,
-    "ytick.major.width": 1.4,
-    "ytick.minor.width": 1.0,
-    "xtick.direction": "in",
-    "ytick.direction": "in",
-    
-    # Legend
-    "legend.frameon": True,
-    "legend.framealpha": 0.96,
-    "legend.edgecolor": "black",
-    "legend.fancybox": False,
-})
+apply_science_style()
 
 class CadencePlotter:
     def __init__(self, base_dir="results_cadence", plot_dir=None):

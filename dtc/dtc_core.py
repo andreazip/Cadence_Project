@@ -4,47 +4,10 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from pathlib import Path
 
+from plot_style import apply_science_style, _multi_panel_figsize
 
-def configure_plot_style():
-    """Apply a consistent plotting style for all generated figures."""
-    matplotlib.rcParams['font.family'] = 'sans-serif'
-    matplotlib.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
 
-    plt.rcParams.update(
-        {
-            "font.size": 11,
-            "axes.titlesize": 14,
-            "axes.labelsize": 12,
-            "xtick.labelsize": 10,
-            "ytick.labelsize": 10,
-            "legend.fontsize": 10,
-            "figure.figsize": (10, 6),
-            "lines.linewidth": 2.6,
-            "lines.markersize": 4,
-            "lines.markeredgewidth": 1.0,
-            "grid.alpha": 0.6,
-            "grid.color": "#b7b7b7",
-            "grid.linestyle": "--",
-            "grid.linewidth": 1.2,
-            "figure.dpi": 100,
-            "savefig.dpi": 300,
-            "savefig.bbox": "tight",
-            "savefig.pad_inches": 0.05,
-            "axes.linewidth": 1.6,
-            "axes.edgecolor": "black",
-            "axes.facecolor": "white",
-            "xtick.major.width": 1.4,
-            "xtick.minor.width": 1.0,
-            "ytick.major.width": 1.4,
-            "ytick.minor.width": 1.0,
-            "xtick.direction": "in",
-            "ytick.direction": "in",
-            "legend.frameon": True,
-            "legend.framealpha": 0.96,
-            "legend.edgecolor": "black",
-            "legend.fancybox": False,
-        }
-    )
+apply_science_style()
 
 
 def compute_sigma_c(ac_nm, area_um2, cu_f):
@@ -164,10 +127,10 @@ class ConstantSlopeDTC:
         raise ValueError("dac_mode must be 'binary', 'thermometer', or 'segmented'")
 
     def energy_msb_0(self, c_k, c0, ca, Vst):
-        return (c0 + self.cramp  + (ca - c_k)) * (c_k / (c0 + self.cramp + ca)) * self.vdd**2  + self.cramp * (Vst**2-self.vdd*Vst + self.vdd**2)
+        return (c0 + self.cramp + (ca - c_k)) * (c_k / (c0 + self.cramp + ca)) * self.vdd**2  + self.cramp * (self.vdd**2-(self.vdd)*self.vdd + (self.vdd/2)**2)
 
     def energy_msb_1(self, ca, c_k, c0, Vst):
-        return (ca - c_k) / (c0 + self.cramp + ca) * (c0 + self.cramp + c_k) * self.vdd**2 + self.cramp * (Vst**2-self.vdd*Vst + self.vdd**2)
+        return (ca - c_k) / (c0 + ca) * (c0 + c_k) * self.vdd**2 + self.cramp * (Vst**2-Vst*(self.vdd) + (self.vdd/2)**2)
 
     def compute_vst_energy(self, cap_array, c0, cramp):
         ca = np.sum(cap_array)
@@ -251,6 +214,7 @@ class VariableSlopeDTC:
         self.c1 = c1
         self.c2 = c2
         self.C_fixed = C_fixed
+        
 
         if isinstance(self_power_down, str):
             self.self_power_down = self_power_down.strip().lower() in {"yes", "true", "1", "on"}
@@ -362,7 +326,8 @@ class VariableSlopeDTC:
             else:
                 cramp_array[i] = cramp_eff
 
-            delay[i] = self.C_fixed *cramp_eff * (self.vdd - self.vth) / ich_eff
+            delay[i] = (self.C_fixed +cramp_eff) * (self.vdd - self.vth) / ich_eff
+
 
         return delay, ich_array, cramp_array, energy_array
 
@@ -387,32 +352,32 @@ class DelayLineDTC:
         vth,
         ich,
         cramp,
-        freq_hz,
+        run_flags,
+        i1,
+        c1,
+        c2,
         sigma_cramp=0.0,
         self_power_down=False,
-        selection_mode="tapped",
+        
     ):
-        self.n_bits = int(n_bits)
-        self.vdd = float(vdd)
-        self.vth = float(vth)
-        self.ich = float(ich)
-        self.cramp = float(cramp)
-        self.freq_hz = float(freq_hz)
-        self.sigma_cramp = float(sigma_cramp)
+        self.n_bits = n_bits
+        self.m = n_bits
+        self.N = 2**n_bits - 1
+        self.run_flags = run_flags
+        self.sigma_c = sigma_cramp
+        self.cramp = cramp
+        self.vdd = vdd
+        self.vth = vth
+        self.ich = ich
+        self.i1 = i1
+        self.c1 = c1
+        self.c2 = c2
+
         if isinstance(self_power_down, str):
             self.self_power_down = self_power_down.strip().lower() in {"yes", "true", "1", "on"}
         else:
             self.self_power_down = bool(self_power_down)
-        self.selection_mode = str(selection_mode).strip().lower()
 
-        if self.n_bits < 1:
-            raise ValueError("n_bits must be >= 1")
-        if self.ich == 0.0:
-            raise ValueError("ich must be non-zero")
-        if self.selection_mode not in {"tapped", "accumulated"}:
-            raise ValueError("selection_mode must be 'tapped' or 'accumulated'")
-
-    @property
     def n_replicas(self):
         return (2**self.n_bits) - 1
 
@@ -420,56 +385,44 @@ class DelayLineDTC:
         if not mismatch_enable or self.sigma_cramp == 0.0:
             return self.cramp
         return self.cramp + np.random.randn() * self.sigma_cramp
-
-    def evaluate_total(self, mismatch_enable=False):
-        """Return total delay/power at full replica count N."""
-        cramp_eff = self._sample_cramp(mismatch_enable=mismatch_enable)
-        n_val = self.n_replicas
-
-        delay_s = ((self.vdd - self.vth) / self.ich) * cramp_eff * n_val
-        power_w = cramp_eff * (self.vdd**2) * self.freq_hz * n_val
+    
+    def energy(self, cramp_eff):
+        energy = cramp_eff * (self.vdd**2)
         if self.self_power_down:
-            power_w = power_w / 4.0
+            energy = energy / 4.0
+        return energy
+    
+    def compute_delay(self, vst_array, clm_enabled=None, nonlin_enabled=None, ich_val=None):
+        if clm_enabled is None:
+            clm_enabled = self.run_flags["CLM"]
+        if nonlin_enabled is None:
+            nonlin_enabled = self.run_flags["Non-linearities-capacitor"]
 
-        return {
-            "N": float(n_val),
-            "cramp_eff_f": float(cramp_eff),
-            "delay_s": float(delay_s),
-            "power_w": float(power_w),
-        }
+        ich_base = self.ich if ich_val is None else ich_val
 
-    def characterize_by_replica(self, mismatch_enable=False):
-        """Return delay/power arrays from 1..N replicas.
+        delay = np.zeros(len(vst_array))
+        ich_array = np.zeros(len(vst_array))
+        cramp_array = np.zeros(len(vst_array))
+        energy_array = np.zeros(len(vst_array))
 
-                selection_mode='tapped':
-                    - delay grows with selected tap index
-                    - power is constant because all stages are active and output is muxed
+        for i, vst in enumerate(vst_array):
+            ich_eff = ich_base
+            cramp = self.cramp
+            energy_array[i] = self.energy(cramp)
 
-                selection_mode='accumulated':
-                    - delay and power both grow with active stage count
+            if clm_enabled:
+                ich_eff = ich_base * (1 + self.i1 * (vst - 0.4))
+                ich_array[i] = ich_eff
 
-                Mismatch is global on Cramp, so only overall scaling changes.
-        """
-        cramp_eff = self._sample_cramp(mismatch_enable=mismatch_enable)
-        n_axis = np.arange(1, self.n_replicas + 1, dtype=float)
+            if nonlin_enabled:
+                cramp_eff = cramp_eff * (1 + self.c1 * vst + self.c2 * vst**2)
+                cramp_array[i] = cramp_eff
+            else:
+                cramp_array[i] = cramp_eff
 
-        k_delay = ((self.vdd - self.vth) / self.ich) * cramp_eff
-        k_power = cramp_eff * (self.vdd**2) * self.freq_hz
-        if self.self_power_down:
-            k_power = k_power / 4.0
+            delay[i] = cramp_eff * (self.vdd - self.vth) / ich_eff
 
-        delay_s = k_delay * n_axis
-        if self.selection_mode == "tapped":
-            power_w = np.full_like(n_axis, k_power * self.n_replicas)
-        else:
-            power_w = k_power * n_axis
-
-        return {
-            "N_axis": n_axis,
-            "cramp_eff_f": float(cramp_eff),
-            "delay_s": delay_s,
-            "power_w": power_w,
-        }
+        return delay, ich_array, cramp_array, energy_array
 
 
 def save_figure_to(fig, filename, out_dir):
@@ -495,7 +448,7 @@ def compute_dnl_inl(delay_s):
 
 
 def plot_delay_power(codes, delay_s, power_w, out_dir, name_prefix):
-    fig_delay = plt.figure(figsize=(10, 6))
+    fig_delay = plt.figure()
     ax = fig_delay.add_subplot(111)
     ax.plot(codes, delay_s * 1e9, color='#D62728', linewidth=2.6, label='Delay')
     ax.set_title(f'{name_prefix} Delay vs Digital Code', fontsize=14, fontweight='bold', pad=12)
@@ -507,7 +460,7 @@ def plot_delay_power(codes, delay_s, power_w, out_dir, name_prefix):
     save_figure_to(fig_delay, f'{name_prefix.lower().replace(" ", "_")}_delay_vs_code.png', out_dir)
     plt.close(fig_delay)
 
-    fig_power = plt.figure(figsize=(10, 6))
+    fig_power = plt.figure()
     ax = fig_power.add_subplot(111)
     ax.plot(codes, power_w * 1e6, color='#1F77B4', linewidth=2.6, label='Power')
     ax.set_title(f'{name_prefix} Power vs Digital Code', fontsize=14, fontweight='bold', pad=12)
@@ -521,7 +474,7 @@ def plot_delay_power(codes, delay_s, power_w, out_dir, name_prefix):
 
 
 def plot_mc_dnl_inl(mc_delay_list, out_dir, name_prefix, n_runs):
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=_multi_panel_figsize(2, 1))
 
     for idx, delay_s in enumerate(mc_delay_list):
         dnl, inl, _ = compute_dnl_inl(delay_s)
@@ -550,7 +503,7 @@ def plot_mc_dnl_inl(mc_delay_list, out_dir, name_prefix, n_runs):
 def plot_aux_effects(codes, ich_s, cramp_s, out_dir, name_prefix):
     """Plot CLM current and effective ramp capacitance when enabled."""
     if np.any(np.abs(ich_s) > 0):
-        fig_current = plt.figure(figsize=(10, 6))
+        fig_current = plt.figure()
         ax = fig_current.add_subplot(111)
         ax.plot(codes, ich_s * 1e9, color='#2CA02C', linewidth=2.6, label='Effective Current')
         ax.set_title(f'{name_prefix} Effective Current vs Digital Code', fontsize=14, fontweight='bold', pad=12)
@@ -563,7 +516,7 @@ def plot_aux_effects(codes, ich_s, cramp_s, out_dir, name_prefix):
         plt.close(fig_current)
 
     if np.any(np.abs(cramp_s) > 0):
-        fig_cap = plt.figure(figsize=(10, 6))
+        fig_cap = plt.figure()
         ax = fig_cap.add_subplot(111)
         ax.plot(codes, cramp_s * 1e15, color='#FF7F0E', linewidth=2.6, label='Effective Ramp Capacitance')
         ax.set_title(f'{name_prefix} Ramp Capacitance vs Digital Code', fontsize=14, fontweight='bold', pad=12)
@@ -628,7 +581,7 @@ def run_constant_slope_simulation(sim, freq_hz, mismatch_enable, cramp, c0_facto
     }
 
 
-def run_variable_slope_simulation(sim, vst_array, freq_hz, mismatch_enable, remove_index, report_mismatch=True):
+def run_variable_slope_simulation(sim, vst_array, freq_hz, mismatch_enable, report_mismatch=True):
     cap_array = sim.build_dac_array(mismatch_enable=mismatch_enable)
     if mismatch_enable and report_mismatch:
         ideal_array = sim.build_dac_array(mismatch_enable=False, sigma=0.0)
@@ -636,18 +589,14 @@ def run_variable_slope_simulation(sim, vst_array, freq_hz, mismatch_enable, remo
 
     delay_array, ich_array, cramp_array, energy_array = sim.compute_delay(vst_array, cap_array)
 
-    if remove_index is None:
-        delay_trim = delay_array
-        power_full = energy_array * freq_hz
-        power_trim = power_full
-        ich_trim = ich_array
-        cramp_trim = cramp_array
-    else:
-        delay_trim = np.delete(delay_array, remove_index)
-        power_full = energy_array * freq_hz
-        power_trim = np.delete(energy_array, remove_index) * freq_hz
-        ich_trim = np.delete(ich_array, remove_index)
-        cramp_trim = np.delete(cramp_array, remove_index)
+    
+    delay_trim = delay_array
+    
+    power_full = energy_array * freq_hz
+    power_trim = power_full
+    ich_trim = ich_array
+    cramp_trim = cramp_array
+
 
     codes = np.arange(len(delay_trim))
 
@@ -662,6 +611,37 @@ def run_variable_slope_simulation(sim, vst_array, freq_hz, mismatch_enable, remo
         'cramp_array_full': cramp_array,
         'codes': codes,
     }
+
+def run_delay_line_simulation(sim, vst_array, freq_hz, mismatch_enable, report_mismatch=True):
+    cramp = sim._sample_cramp(sim, mismatch_enable=mismatch_enable)
+    if mismatch_enable and report_mismatch:
+        ideal_cap = sim._sample_cramp(mismatch_enable=False, sigma=0.0)
+        report_mismatch_stats(cramp, ideal_cap, 'Delay line Cramp')
+
+    delay_array, ich_array, cramp_array, energy_array = sim.compute_delay(vst_array)
+
+
+    delay_trim = delay_array
+    power_full = energy_array * freq_hz
+    power_trim = power_full
+    ich_trim = ich_array
+    cramp_trim = cramp_array
+    
+
+    codes = np.arange(len(delay_trim))
+
+    return {
+        'cap_array': cramp_array,
+        'delay_array_full': delay_array,
+        'power_array_full': power_full,
+        'delay_array': delay_trim,
+        'power_array': power_trim,
+        'ich_array': ich_trim,
+        'cramp_array': cramp_trim,
+        'cramp_array_full': cramp_array,
+        'codes': codes,
+    }
+
 
 
 def lsb_from_curve(delay_arr):

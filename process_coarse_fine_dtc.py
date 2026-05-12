@@ -5,44 +5,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from plot_style import apply_science_style
 
 
-# ===== PUBLICATION-READY PLOT STYLE (matching coarse_fine_dtc.py) =====
-plt.rcParams.update({
-    "font.family": "sans-serif",
-    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
-    "font.size": 11,
-    "axes.titlesize": 14,
-    "axes.labelsize": 12,
-    "xtick.labelsize": 10,
-    "ytick.labelsize": 10,
-    "legend.fontsize": 10,
-    "figure.figsize": (10, 6),
-    "lines.linewidth": 2.6,
-    "lines.markersize": 4,
-    "lines.markeredgewidth": 1.0,
-    "grid.alpha": 0.6,
-    "grid.color": "#b7b7b7",
-    "grid.linestyle": "--",
-    "grid.linewidth": 1.2,
-    "figure.dpi": 100,
-    "savefig.dpi": 300,
-    "savefig.bbox": "tight",
-    "savefig.pad_inches": 0.05,
-    "axes.linewidth": 1.6,
-    "axes.edgecolor": "black",
-    "axes.facecolor": "white",
-    "xtick.major.width": 1.4,
-    "xtick.minor.width": 1.0,
-    "ytick.major.width": 1.4,
-    "ytick.minor.width": 1.0,
-    "xtick.direction": "in",
-    "ytick.direction": "in",
-    "legend.frameon": True,
-    "legend.framealpha": 0.96,
-    "legend.edgecolor": "black",
-    "legend.fancybox": False,
-})
+apply_science_style()
 
 
 SAVE_DIR = Path(

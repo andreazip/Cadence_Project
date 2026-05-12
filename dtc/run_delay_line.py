@@ -3,7 +3,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from dtc.dtc_core import DelayLineDTC, compute_dnl_inl, configure_plot_style, save_figure_to
+from dtc.dtc_core import DelayLineDTC, compute_dnl_inl, save_figure_to
+from plot_style import apply_science_style
 
 
 CONFIG = {
@@ -88,7 +89,7 @@ def plot_delay_line_dnl_inl(replica_axis, delay_s, out_dir):
 
 
 def main():
-    configure_plot_style()
+    apply_science_style()
 
     out_dir = CONFIG["save_dir"] / CONFIG["plot_folder"] / CONFIG["delay_line_folder"]
 
