@@ -15,7 +15,7 @@ from dtc.dtc_core import (
     run_constant_slope_simulation,
     run_variable_slope_simulation,
 )
-from plot_style import apply_science_style
+from plot_style import apply_science_style, _multi_panel_figsize, maybe_title, maybe_suptitle
 
 
 # ---------------------------
@@ -29,29 +29,30 @@ CONFIG = {
         "CLM": False,
         "Non-linearities-capacitor": False,
     },
-    "n_bits": 11,
-    "cu": 2e-15,
+    "n_bits": 12,
+    "cu": 0.2e-15,
     "dac_mode": "binary",  # baseline mode for delay/power/summaries
     "segmented_thermo_bits": 4,
-    "ac_nm": 5.218e-3,
-    "area_um2": 3.5,
+    "ac_nm": 5.6e-3,
+    "area_um2": 2, #1.62, #0.89
     "vdd": 1.1,
     "vth": 0.55,
     # Apply directly to Vdd and Vth in runner.
     "voltage_scale_factor_constant": 1,
     "voltage_scale_factor_variable": 1,
-    "f_hz":100e6,
-    "ich_constant": 26.4e-6,
-    "ich_variable": 6.9e-6,
+    "f_hz":50e6,
+    "ich_constant": 92e-6,
+    "ich_variable": 920e-6,
     "divide_ich_by_c0_factor": True,
     "self_power_down_variable": "yes",  # "yes" or "no"
-    "cramp": 2e-15,
+    "self_power_down_constant": "yes",  # "yes" or "no"
+    "cramp": 418e-15,
     "cramp_u": 2e-15,  # Only used for variable slope DAC. If not provided, "cramp" value will be used.
     "c1": 0.323,
     "c2": -0.09,
     "i1": 0.184,
     "c0_factor": 1.0,  # used when c0_factors is not provided
-    "c0_factors": [0.5, 1.0, 1.5],
+    "c0_factors": [1],
     "mc_runs": 100,
     "mc_modes": ["binary", "segmented"],
     "C_fixed" : 120e-15, # Fixed capacitance added to each DAC code (e.g. from routing or intentional cap)
@@ -73,6 +74,7 @@ def build_constant_sim(config, sigma_c, dac_mode, vdd_eff, vth_eff):
         i1=config["i1"],
         c1=config["c1"],
         c2=config["c2"],
+        self_power_down=config.get("self_power_down_constant", True),
     )
 
 
@@ -297,29 +299,24 @@ def main():
 
         print(f"All requested plots saved to:\n- {constant_save_path}\n- {variable_save_path}")
 
-    fig, (ax_cs, ax_vs) = plt.subplots(2, 1, figsize=(11, 8), sharex=True)
+    fig, ax_cs = plt.subplots(figsize=_multi_panel_figsize(1, 1))
 
     for item in power_sweep_cs:
         ax_cs.plot(item["codes"], item["power"] * 1e6, lw=2, label=f"C0 x{item['c0_factor']:g}")
-    ax_cs.set_title("Constant Slope Power vs Code (C0 Sweep)")
-    ax_cs.set_ylabel("Power (uW)")
+    maybe_suptitle(ax_cs, "Constant Slope Power vs Code (C0 Sweep)")
+    ax_cs.set_xlabel("Digital Code")
+    ax_cs.set_ylabel(r"Power ($\mu$W)")
     ax_cs.grid(True, alpha=0.3)
     ax_cs.legend(frameon=False)
 
-    for item in power_sweep_vs:
-        ax_vs.plot(item["codes"], item["power"] * 1e6, lw=2, label=f"C0 x{item['c0_factor']:g}")
-    ax_vs.set_title("Variable Slope Power vs Code (C0 Sweep)")
-    ax_vs.set_xlabel("Digital Code")
-    ax_vs.set_ylabel("Power (uW)")
-    ax_vs.grid(True, alpha=0.3)
-    ax_vs.legend(frameon=False)
-
     fig.tight_layout()
-    combined_power_path = save_path / "power_comparison_c0_sweep.png"
+    combined_power_path = save_path / "power_constant_slope_c0_sweep.png"
     fig.savefig(combined_power_path, dpi=300)
     plt.close(fig)
 
-    print(f"Combined power sweep figure saved to:\n- {combined_power_path}")
+    print(f"Constant slope power sweep figure saved to:\n- {combined_power_path}")
+
+
 
 
 if __name__ == "__main__":

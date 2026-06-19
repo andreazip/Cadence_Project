@@ -1,3 +1,5 @@
+from os import remove
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
@@ -6,7 +8,7 @@ import numpy as np
 import argparse
 from pathlib import Path
 
-from plot_style import apply_science_style
+from plot_style import apply_science_style, _multi_panel_figsize, maybe_title, maybe_suptitle
 
 # ============================================================================
 # QUICK CLI CHEATSHEET (run from project root)
@@ -35,15 +37,6 @@ class CadencePlotter:
         self.plot_dir = Path(plot_dir) if plot_dir else Path("plots")
         self.plot_dir.mkdir(exist_ok=True)
         
-        # Professional color palette for consistent styling
-        self.colors = {
-            'primary': '#D62728',      # Crimson Red
-            'secondary': '#1F77B4',    # Steel Blue  
-            'tertiary': '#2CA02C',     # Forest Green
-            'quaternary': '#FF7F0E',   # Dark Orange
-            'accent': '#9467BD',       # Purple
-            'neutral': '#7F7F7F',      # Gray
-        }
 
     # ========================================================================
     # HELPER METHODS - Reduce Redundancy
@@ -56,16 +49,18 @@ class CadencePlotter:
         print(f"  Saved: {save_path.name}")
         plt.close(fig)  # Close specific figure
     
-    def _create_figure(self, nrows=1, ncols=1, figsize=None, sharex=False, sharey=False):
+    def _create_figure(self, nrows=1, ncols=1, sharex=False, sharey=False):
         """Unified figure creation with consistent parameters."""
-        if figsize is None:
-            figsize = (10, 6) if nrows == 1 else (10, 5*nrows)
-        
         if nrows == 1 and ncols == 1:
-            fig, ax = plt.subplots(figsize=figsize)
+            fig, ax = plt.subplots()
             return fig, ax
-        else:
-            return plt.subplots(nrows, ncols, figsize=figsize, sharex=sharex, sharey=sharey)
+        return plt.subplots(
+            nrows,
+            ncols,
+            figsize=_multi_panel_figsize(nrows, ncols),
+            sharex=sharex,
+            sharey=sharey,
+        )
     
     def _apply_grid_styling(self, ax, alpha=0.6):
         """Apply consistent grid styling."""
@@ -112,7 +107,7 @@ class CadencePlotter:
         if ylabel:
             ax.set_ylabel(ylabel, fontsize=12, fontweight='bold')
         if title:
-            ax.set_title(title, fontsize=14, fontweight='bold', pad=15)
+            maybe_title(ax, title)
     
     def _get_metric_info(self, filename, metric_col=None):
         """Get metric type info (power vs delay) and scaling."""
@@ -522,6 +517,162 @@ class CadencePlotter:
 
         return sorted(sweeps, key=lambda s: s["iteration"])
 
+    def _extract_phase_noise_sweeps(self, df):
+        """Extract phase noise sweeps from X/Y columns and label by bit code."""
+        x_cols = [c for c in df.columns if str(c).endswith(' X') or str(c).endswith('X')]
+        sweeps = []
+
+        for x_col in x_cols:
+            x_col_str = str(x_col)
+            y_col = x_col_str[:-1] + 'Y' if x_col_str.endswith('X') else x_col_str[:-2] + ' Y'
+            if y_col not in df.columns:
+                continue
+
+            header_bits = re.findall(r"b(\d+)=(\d+)", x_col_str)
+            if header_bits:
+                bit_dict = {int(idx): int(val) for idx, val in header_bits}
+                max_bit = max(bit_dict.keys())
+                bits = [bit_dict.get(i, 0) for i in range(max_bit, -1, -1)]
+                label = "".join(str(b) for b in bits)
+                if all(b == 0 for b in bits):
+                    color_key = "all0"
+                elif all(b == 1 for b in bits):
+                    color_key = "all1"
+                else:
+                    color_key = label
+            else:
+                label = "code"
+                color_key = label
+
+            x_vals = pd.to_numeric(df[x_col_str], errors='coerce')
+            y_vals = pd.to_numeric(df[y_col], errors='coerce')
+            mask = x_vals.notna() & y_vals.notna()
+            if not mask.any():
+                continue
+
+            sweeps.append({
+                "label": label,
+                "color_key": color_key,
+                "x": x_vals[mask].values,
+                "y": y_vals[mask].values,
+            })
+
+        return sweeps
+
+    def _compute_jitter_rms(self, freq_hz, phase_noise_dbc_hz, carrier_hz):
+        """Compute RMS jitter from phase noise over the full frequency span."""
+        if carrier_hz is None or carrier_hz <= 0:
+            return None
+
+        freq_arr = np.asarray(freq_hz, dtype=float)
+        pn_arr = np.asarray(phase_noise_dbc_hz, dtype=float)
+        mask = np.isfinite(freq_arr) & np.isfinite(pn_arr) & (freq_arr > 0)
+        if not mask.any():
+            return None
+
+        f = freq_arr[mask]
+        pn = pn_arr[mask]
+        order = np.argsort(f)
+        f = f[order]
+        pn = pn[order]
+
+        # Convert L(f) [dBc/Hz] to phase noise PSD Sphi [rad^2/Hz]
+        s_phi = 2.0 * np.power(10.0, pn / 10.0)
+        integral = np.trapz(s_phi, f)
+        jitter_rms = np.sqrt(integral) / (2.0 * np.pi * carrier_hz)
+        return float(jitter_rms)
+
+    def plot_phase_noise_comparison(self, cs_filename, vs_filename=None, title=None, log_x=True, carrier_hz=None, label_a=None, label_b=None):
+        """Plot phase noise together with code-based colors and line styles for each file."""
+        if not cs_filename:
+            print("Warning: Provide at least one phase noise file.")
+            return
+
+        cs_df, _ = self.load_data(cs_filename)
+        vs_df = None
+        if vs_filename:
+            vs_df, _ = self.load_data(vs_filename)
+        if cs_df is None:
+            return
+
+        cs_sweeps = self._extract_phase_noise_sweeps(cs_df)
+        vs_sweeps = self._extract_phase_noise_sweeps(vs_df) if vs_df is not None else []
+        if not cs_sweeps and not vs_sweeps:
+            print("Warning: No phase noise sweeps found.")
+            return
+
+        label_a = (label_a or "A").strip()
+        label_b = (label_b or "B").strip()
+        all_keys = sorted({s.get("color_key", s["label"]) for s in cs_sweeps + vs_sweeps})
+        cmap = plt.get_cmap("tab10")
+        label_colors = {
+            key: cmap(idx % cmap.N)
+            for idx, key in enumerate(all_keys)
+        }
+        fig, ax = self._create_figure()
+
+        for sweep in cs_sweeps:
+            jitter_rms = self._compute_jitter_rms(
+                sweep["x"],
+                sweep["y"],
+                carrier_hz,
+            )
+            jitter_label = f" | RMS={jitter_rms * 1e12:.2f} ps" if jitter_rms is not None else ""
+            color_key = sweep.get("color_key", sweep["label"])
+            curve_color = label_colors.get(color_key, self.colors['primary'])
+            ax.plot(
+                sweep["x"],
+                sweep["y"],
+                color=curve_color,
+                linestyle='-',
+                linewidth=2.2,
+                label=f"{label_a} {sweep['label']}{jitter_label}",
+            )
+
+        for sweep in vs_sweeps:
+            jitter_rms = self._compute_jitter_rms(
+                sweep["x"],
+                sweep["y"],
+                carrier_hz,
+            )
+            jitter_label = f" | RMS={jitter_rms * 1e12:.2f} ps" if jitter_rms is not None else ""
+            color_key = sweep.get("color_key", sweep["label"])
+            curve_color = label_colors.get(color_key, self.colors['secondary'])
+            ax.plot(
+                sweep["x"],
+                sweep["y"],
+                color=curve_color,
+                linestyle='--',
+                linewidth=2.2,
+                label=f"{label_b} {sweep['label']}{jitter_label}",
+            )
+
+        if log_x:
+            ax.set_xscale('log')
+
+        plot_title = title or "Phase Noise Comparison"
+        self._format_plot_labels(
+            ax,
+            xlabel="Offset Frequency (Hz)",
+            ylabel="Phase Noise (dBc/Hz)",
+            title=plot_title,
+        )
+        ax.legend(fontsize=6, ncol=1, framealpha=0.95)
+        self._apply_grid_styling(ax, alpha=0.35)
+
+        plt.tight_layout()
+        target_dir = self.plot_dir / "phase_noise"
+        target_dir.mkdir(exist_ok=True)
+        if vs_filename:
+            save_path = target_dir / (
+                f"phase_noise_{self._sanitize(Path(cs_filename).stem)}"
+                f"_vs_{self._sanitize(Path(vs_filename).stem)}.png"
+            )
+        else:
+            save_path = target_dir / f"phase_noise_{self._sanitize(Path(cs_filename).stem)}.png"
+        self._save_figure(fig, save_path)
+
+
     def plot_mcparamset_sweep(self, filename, max_realizations=200):
         """Plot sweep curves for mcparamset X/Y data with mean overlay."""
         df, path = self.load_data(filename)
@@ -535,7 +686,7 @@ class CadencePlotter:
         sweeps = sweeps[:max_realizations]
         metric_info = self._get_metric_info(filename)
 
-        fig, ax = self._create_figure(figsize=(12, 7))
+        fig, ax = self._create_figure()
 
         for idx, sweep in enumerate(sweeps):
             x_vals = sweep["x"]
@@ -575,7 +726,7 @@ class CadencePlotter:
 
         sweeps = sweeps[:max_realizations]
 
-        fig, (ax_dnl, ax_inl) = self._create_figure(nrows=2, ncols=1, figsize=(12, 9), sharex=True)
+        fig, (ax_dnl, ax_inl) = self._create_figure(nrows=2, ncols=1, sharex=True)
 
         for idx, sweep in enumerate(sweeps):
             y_vals = sweep["y"]
@@ -594,7 +745,7 @@ class CadencePlotter:
         clean_title = self._format_title(thesis_title)
 
         ax_dnl.set_ylabel("DNL (LSB)", fontsize=12, fontweight='bold')
-        ax_dnl.set_title(clean_title, fontsize=14, fontweight='bold', pad=15)
+        maybe_suptitle(ax_dnl,clean_title, fontsize=14, fontweight='bold', pad=15)
         ax_dnl.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
         ax_dnl.axhline(y=0.5, color='red', linestyle='--', linewidth=1, alpha=0.6, label='±0.5 LSB')
         ax_dnl.axhline(y=-0.5, color='red', linestyle='--', linewidth=1, alpha=0.6)
@@ -603,7 +754,7 @@ class CadencePlotter:
         self._apply_grid_styling(ax_dnl, alpha=0.35)
 
         ax_inl.set_ylabel("INL (LSB)", fontsize=12, fontweight='bold')
-        ax_inl.set_title("Integral Non-Linearity (INL)", fontsize=14, fontweight='bold', pad=15)
+        maybe_suptitle(ax_inl, "Integral Non-Linearity (INL)", fontsize=14, fontweight='bold', pad=15)
         ax_inl.set_xlabel("Digital Code", fontsize=12, fontweight='bold')
         ax_inl.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
         ax_inl.legend(fontsize=10, loc='upper right', framealpha=0.95)
@@ -665,7 +816,7 @@ class CadencePlotter:
         ##static_power_w = float(all_averages[0]) if len(all_averages) > 0 else 0.0
 
         # Remove middle code and shift all right-side codes one step left.
-        remove_idx = num_codes // 2 +1 if num_codes > 0 else None
+        remove_idx = num_codes // 2  if num_codes > 0 else None
 
         plot_averages = []
         if remove_code and remove_idx is not None:
@@ -682,10 +833,10 @@ class CadencePlotter:
         # Remove static power offset for plotting.
         plot_averages_offset_w = np.array(plot_averages)  - P_static
         # Create publication-ready plot
-        fig, ax = self._create_figure(figsize=(12, 7))
+        fig, ax = self._create_figure()
         
         legend_label = (
-            f"Average Power - $P_{{static}}$, $P_{{static}}$={P_static * 1e6:.3f} uW"
+            f"$P_{{static}}$={P_static * 1e6:.3f} uW"
         )
         if remove_code and remove_idx is not None:
             legend_label += f", removed code {remove_idx}"
@@ -703,7 +854,7 @@ class CadencePlotter:
             title=clean_title
         )
         
-        ax.legend(fontsize=11, loc='best', framealpha=0.95)
+        ax.legend( loc='best', framealpha=0.95)
         self._apply_grid_styling(ax, alpha=0.35)
         
         plt.tight_layout()
@@ -737,7 +888,7 @@ class CadencePlotter:
             iterations = sorted(df['mc_iteration'].unique())[:max_iterations]
             metric_info = self._get_metric_info(signal_name)
             
-            fig, ax = self._create_figure(figsize=(11, 6))
+            fig, ax = self._create_figure()
             
             for idx, iteration in enumerate(iterations):
                 df_iter = df[df['mc_iteration'] == iteration].copy()
@@ -784,7 +935,7 @@ class CadencePlotter:
         res = dr / (len(y) - 1) if len(y) > 1 else 0
 
         # Plot
-        fig, ax = self._create_figure(figsize=(11, 6))
+        fig, ax = self._create_figure()
         ax.plot(plot_df['label'], y_to_plot, marker=None, color=self.colors['primary'], 
             linewidth=2.6, 
                 label=f"DR: {dr:.3f} {metric_info['prefix']}{metric_info['unit']} | "
@@ -805,7 +956,7 @@ class CadencePlotter:
         save_path = self._get_save_path(filename, signal_name, "sweep")
         self._save_figure(fig, save_path)
 
-    def plot_mc_sweep_all_realizations(self, filename, max_realizations=200):
+    def plot_mc_sweep_all_realizations(self, filename, max_realizations=200,remove_code=False):
         """
         Plot delay vs code for all MC realizations overlaid with improved styling.
         Format: Each column is one iteration's delay data (256 values)
@@ -824,8 +975,11 @@ class CadencePlotter:
         num_realizations = min(data.shape[1], max_realizations)
         num_codes = data.shape[0]
         
-        data_subset = data.iloc[:, :num_realizations]
-        data_clean, removed_idx = self._remove_middle_code_rows(data_subset)
+        data_clean = data.iloc[:, :num_realizations]
+        if remove_code:
+            data_clean, removed_idx = self._remove_middle_code_rows(data_clean)
+        else:
+            removed_idx = None
         codes = np.arange(data_clean.shape[0])
         
         print(f"Processing {num_realizations} sweep curves with {data_clean.shape[0]} codes per curve")
@@ -833,7 +987,7 @@ class CadencePlotter:
             print(f"Removed redundant middle code at index {removed_idx}")
         
         # Create figure
-        fig, ax = self._create_figure(figsize=(12, 7))
+        fig, ax = self._create_figure()
         
         for iter_idx in range(num_realizations):
             delays = data_clean.iloc[:, iter_idx].values
@@ -852,7 +1006,7 @@ class CadencePlotter:
         ax.set_ylabel("Relative Delay (ns)", fontsize=12, fontweight='bold')
         thesis_title = self._get_thesis_title(filename, "mc_sweep_all")
         clean_title = self._format_title(thesis_title)
-        ax.set_title(clean_title, fontsize=14, fontweight='bold', pad=15)
+        maybe_title(ax, clean_title, fontsize=14, fontweight='bold', pad=15)
         self._apply_grid_styling(ax)
         
         plt.tight_layout()
@@ -860,7 +1014,7 @@ class CadencePlotter:
         save_path = self._get_save_path(filename, "MC_Sweep", f"mc_all_{num_realizations}_sweeps")
         self._save_figure(fig, save_path)
 
-    def plot_mc_linearity_all_realizations_xy(self, filename, max_realizations=200):
+    def plot_mc_linearity_all_realizations_xy(self, filename, max_realizations=200, remove_code=False):
         """
         Plot DNL and INL for MC data with column-based iterations (improved styling).
         Format: Each column is one iteration's delay data (256 values)
@@ -881,14 +1035,18 @@ class CadencePlotter:
         num_codes = data.shape[0]
         
         data_subset = data.iloc[:, :num_realizations]
-        data_clean, removed_idx = self._remove_middle_code_rows(data_subset)
+        if remove_code:
+            data_clean, removed_idx = self._remove_middle_code_rows(data_subset)
+        else:
+            data_clean = data_subset
+            removed_idx = None
 
         print(f"Processing {num_realizations} iterations with {data_clean.shape[0]} codes per iteration")
         if removed_idx is not None:
             print(f"Removed redundant middle code at index {removed_idx}")
         
         # Create figure with 2 subplots (DNL and INL)
-        fig, (ax_dnl, ax_inl) = self._create_figure(nrows=2, ncols=1, figsize=(14, 10), sharex=True)
+        fig, (ax_dnl, ax_inl) = self._create_figure(nrows=2, ncols=1, sharex=True)
         
         for iter_idx in range(num_realizations):
             delays = data_clean.iloc[:, iter_idx].values
@@ -912,7 +1070,7 @@ class CadencePlotter:
         clean_title = self._format_title(thesis_title_dnl)
         
         ax_dnl.set_ylabel("DNL (LSB)", fontsize=12, fontweight='bold')
-        ax_dnl.set_title(clean_title, fontsize=14, fontweight='bold', pad=15)
+        maybe_suptitle(ax_dnl, clean_title, fontsize=14, fontweight='bold', pad=15)
         self._apply_grid_styling(ax_dnl, alpha=0.35)
         ax_dnl.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
         ax_dnl.axhline(y=0.5, color='red', linestyle='--', linewidth=1, alpha=0.6, label='±0.5 LSB')
@@ -921,7 +1079,7 @@ class CadencePlotter:
         ax_dnl.legend(fontsize=10, loc='upper right', framealpha=0.95)
         
         ax_inl.set_ylabel("INL (LSB)", fontsize=12, fontweight='bold')
-        ax_inl.set_title("Integral Non-Linearity (INL)", fontsize=14, fontweight='bold', pad=15)
+        maybe_suptitle(ax_inl, "Integral Non-Linearity (INL)", fontsize=14, fontweight='bold', pad=15)
         ax_inl.set_xlabel("Digital Code", fontsize=12, fontweight='bold')
         self._apply_grid_styling(ax_inl, alpha=0.35)
         ax_inl.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
@@ -967,7 +1125,7 @@ class CadencePlotter:
         df = self._filter_mc_iterations(df)
         
         # Create figure with 2 subplots (DNL and INL)
-        fig, (ax_dnl, ax_inl) = self._create_figure(nrows=2, ncols=1, figsize=(14, 10), sharex=True)
+        fig, (ax_dnl, ax_inl) = self._create_figure(nrows=2, ncols=1, sharex=True)
         
         # Iterate through each MC realization
         iterations = sorted(df['mc_iteration'].unique())[:max_iterations]
@@ -996,7 +1154,7 @@ class CadencePlotter:
         
         # Formatting
         ax_dnl.set_ylabel("DNL (LSB)", fontsize=12, fontweight='bold')
-        ax_dnl.set_title(f"DNL - All {num_iterations} MC Realizations (LSB=ideal)", fontsize=14, fontweight='bold')
+        maybe_suptitle(ax_dnl, f"DNL - All {num_iterations} MC Realizations (LSB=ideal)", fontsize=14, fontweight='bold')
         self._apply_grid_styling(ax_dnl)
         ax_dnl.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
         ax_dnl.axhline(y=1, color='red', linestyle='--', linewidth=0.8, alpha=0.5, label='±1 LSB')
@@ -1004,7 +1162,7 @@ class CadencePlotter:
         ax_dnl.legend(fontsize=10, loc='upper right')
         
         ax_inl.set_ylabel("INL (LSB)", fontsize=12, fontweight='bold')
-        ax_inl.set_title(f"INL - All {num_iterations} MC Realizations (LSB=ideal)", fontsize=14, fontweight='bold')
+        maybe_suptitle(ax_inl, f"INL - All {num_iterations} MC Realizations (LSB=ideal)", fontsize=14, fontweight='bold')
         ax_inl.set_xlabel("Digital Code", fontsize=12, fontweight='bold')
         self._apply_grid_styling(ax_inl)
         ax_inl.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
@@ -1044,7 +1202,7 @@ class CadencePlotter:
             return
 
         # Create figure with improved styling
-        fig, (ax1, ax2) = self._create_figure(nrows=2, ncols=1, figsize=(11, 9), sharex=True)
+        fig, (ax1, ax2) = self._create_figure(nrows=2, ncols=1, sharex=True)
         
         # DNL plot
         ax1.plot(plot_df['label'], dnl, marker=None, color=self.colors['secondary'], 
@@ -1111,7 +1269,7 @@ class CadencePlotter:
         tick_labels = [str(int(c)) for c in codes[tick_positions]]
         
         # ===== PLOT 1: Sweep =====
-        fig1, ax1 = self._create_figure(figsize=(11, 6))
+        fig1, ax1 = self._create_figure()
         ax1.plot(codes, y_to_plot, marker=None, color=self.colors['primary'], 
              linewidth=2.6, label='Measured', alpha=0.9)
         
@@ -1137,7 +1295,7 @@ class CadencePlotter:
         if len(dnl) == 0:
             return
         
-        fig2, (ax2, ax3) = self._create_figure(nrows=2, ncols=1, figsize=(11, 9), sharex=True)
+        fig2, (ax2, ax3) = self._create_figure(nrows=2, ncols=1, sharex=True)
         
         # DNL plot
         ax2.plot(codes, dnl, marker=None, color=self.colors['secondary'], 
@@ -1173,10 +1331,11 @@ class CadencePlotter:
         self._save_figure(fig2, save_path2)
 
 
-    def plot_histogram(self, filenames):
+    def plot_histogram(self, filenames, remove_code=True, max_realizations=200):
         """
         Plots histograms for Monte Carlo data with improved styling.
-        If two files are provided, it calculates DR and Resolution per iteration.
+        If a single MC X/Y dataset is provided, it calculates dynamic range and
+        resolution per realization.
         """
         # Handle single file or list of two files
         if isinstance(filenames, str):
@@ -1190,8 +1349,56 @@ class CadencePlotter:
         
         if not datasets: return
 
-        # --- Case A: Two Files (Calculate DR and Resolution) ---
-        if len(datasets) == 2:
+        # --- Case A: Single MC X/Y file (Calculate DR and Resolution) ---
+        if len(datasets) == 1:
+            df = datasets[0]
+            x_cols = [c for c in df.columns if c.endswith(' X')]
+            if x_cols:
+                metric_info = self._get_metric_info(filenames[0])
+                dr_values = []
+                res_values = []
+
+                for x_col in x_cols:
+                    y_col = x_col[:-2] + ' Y'
+                    if y_col not in df.columns:
+                        continue
+
+                    y_vals = pd.to_numeric(df[y_col], errors='coerce').dropna().values
+                    if len(y_vals) < 2:
+                        continue
+
+                    if remove_code:
+                        y_df = pd.DataFrame({'y': y_vals})
+                        y_df, _ = self._remove_middle_code_rows(y_df)
+                        if y_df is not None:
+                            y_vals = y_df['y'].values
+
+                    if len(y_vals) < 2:
+                        continue
+
+                    dr = float(np.max(y_vals) - np.min(y_vals))
+                    res = dr / (len(y_vals) - 1)
+                    dr_values.append(dr)
+                    res_values.append(res)
+
+                    if len(dr_values) >= max_realizations:
+                        break
+
+                if not dr_values or not res_values:
+                    return
+
+                metrics = {
+                    f"Dynamic Range (n{metric_info['unit']})": np.array(dr_values) * 1e9,
+                    f"Resolution (p{metric_info['unit']})": np.array(res_values) * 1e12,
+                }
+                save_suffix = "mc_derived_metrics"
+            else:
+                data = pd.to_numeric(df.iloc[:, 0], errors='coerce').dropna()
+                metrics = {df.columns[0]: data}
+                save_suffix = "mc_standard"
+
+        # --- Case B: Two Files (Calculate DR and Resolution) ---
+        elif len(datasets) == 2:
             # Assume col 0 is the data. Align indices to ensure iterations match.
             y1 = pd.to_numeric(datasets[0].iloc[:, 0], errors='coerce')
             y2 = pd.to_numeric(datasets[1].iloc[:, 0], errors='coerce')
@@ -1207,7 +1414,7 @@ class CadencePlotter:
             }
             save_suffix = "mc_derived_metrics"
         
-        # --- Case B: Single File (Standard Histogram) ---
+        # --- Case C: Single File (Standard Histogram) ---
         else:
             data = pd.to_numeric(datasets[0].iloc[:, 0], errors='coerce').dropna()
             metrics = {datasets[0].columns[0]: data}
@@ -1215,7 +1422,7 @@ class CadencePlotter:
 
         # --- Plotting Loop with Enhanced Styling ---
         num_metrics = len(metrics)
-        fig, axes = plt.subplots(num_metrics, 1, figsize=(12, 7 * num_metrics))
+        fig, axes = plt.subplots(num_metrics, 1, figsize=_multi_panel_figsize(num_metrics, 1))
         if num_metrics == 1: 
             axes = [axes]
 
@@ -1229,27 +1436,36 @@ class CadencePlotter:
                                            edgecolor='black', linewidth=1.2, 
                                            alpha=0.75, label='Data Distribution')
             
+            clean_label = self._format_title(label)
+            if clean_label.lower() == "resolution (ps)":
+                scale_factor = 1e12
+                unit = "ps"
+            else:
+                scale_factor = 1e9
+                unit = "ns"
+
             # Calculate statistics
-            mean, std, median = data.mean(), data.std(), data.median()
+            mean, std = data.mean(), data.std()
             min_val, max_val = data.min(), data.max()
             
             # Plot vertical lines for statistics
-            ax.axvline(mean, color='#d62728', linestyle='-', linewidth=2.5, 
-                      label=f'Mean: {mean:.3e}', alpha=0.9)
-            ax.axvline(median, color='#2ca02c', linestyle='--', linewidth=2, 
-                      label=f'Median: {median:.3e}', alpha=0.8)
-            ax.axvline(mean + std, color='#ff7f0e', linestyle=':', linewidth=2, 
-                      label=f'Std Dev: {std:.3e}', alpha=0.8)
-            ax.axvline(mean - std, color='#ff7f0e', linestyle=':', linewidth=2, alpha=0.8)
-            
-            # Highlight ±1σ region
-            ax.axvspan(mean - std, mean + std, color='#ff7f0e', alpha=0.08)
+            ax.axvline(mean, color='#d62728', linestyle='-', linewidth=2.5,
+                      label=f'Mean: {mean:.2f} {unit}', alpha=0.9)
+            # ax.axvline(median, color='#2ca02c', linestyle='--', linewidth=2,
+            #           label=f'Median: {median:.3e}', alpha=0.8)
+
+            # Highlight +/- 3 sigma region
+            three_sigma = 3 * std
+            ax.axvline(mean + three_sigma, color='#ff7f0e', linestyle=':', linewidth=2,
+                      label=rf'$\pm 3 \sigma$: {three_sigma:.2f} {unit}', alpha=0.85)
+            ax.axvline(mean - three_sigma, color='#ff7f0e', linestyle=':', linewidth=2, alpha=0.85)
+            ax.axvspan(mean - three_sigma, mean + three_sigma, color='#ff7f0e', alpha=0.08)
             
             # Formatting
             thesis_title = self._get_thesis_title(filenames[0], "mc_distribution")
             clean_label = self._format_title(label)
             
-            ax.set_title(thesis_title, fontsize=14, fontweight='bold', pad=15)
+            maybe_title(ax, thesis_title, fontsize=14, fontweight='bold', pad=15)
             ax.set_xlabel(clean_label, fontsize=12, fontweight='bold')
             ax.set_ylabel("Frequency (Count)", fontsize=12, fontweight='bold')
             
@@ -1273,7 +1489,7 @@ class CadencePlotter:
         if df is None: return None
         x_cols = [c for c in df.columns if c.endswith(' X')]
         
-        fig, ax = plt.subplots(figsize=(11, 6))
+        fig, ax = plt.subplots()
         corner_pattern = re.compile(r"top_(\w+)")
         for x_col in x_cols:
             y_col = x_col[:-2] + ' Y'
@@ -1288,7 +1504,7 @@ class CadencePlotter:
         ax.set_ylabel(ylabel, fontsize=12, fontweight='bold')
         
         thesis_title = self._get_thesis_title(filename, "corner")
-        ax.set_title(thesis_title, fontsize=14, fontweight='bold', pad=15)
+        maybe_title(ax, thesis_title, fontsize=14, fontweight='bold', pad=15)
         
         ax.legend(title="Corners", fontsize=10, framealpha=0.95)
         ax.grid(True, alpha=0.3)
@@ -1297,7 +1513,7 @@ class CadencePlotter:
         save_path = self._get_save_path(filename, path.name ,"corner_T")
         self._save_figure(fig, save_path)
 
-    def plot_corner_linearity_xy(self, filename):
+    def plot_corner_linearity_xy(self, filename, remove_code=True):
         """Plot DNL/INL across corners from alternating X/Y columns with labels in row 0."""
         path = self.base_dir / filename
         if not path.exists():
@@ -1320,11 +1536,15 @@ class CadencePlotter:
         ax_sweep = {}
 
         for corner in corners:
-            fig[corner], (ax_dnl[corner], ax_inl[corner]) = plt.subplots(2, 1, figsize=(11, 10))
+            fig[corner], (ax_dnl[corner], ax_inl[corner]) = plt.subplots(
+                2,
+                1,
+                figsize=_multi_panel_figsize(2, 1),
+            )
             fig[corner].patch.set_facecolor('white')
             fig[corner].patch.set_alpha(1.0)
             
-            fig_sweep[corner], ax_sweep[corner] = self._create_figure(figsize=(11, 6))
+            fig_sweep[corner], ax_sweep[corner] = self._create_figure()
 
         color_cycle = [
             self.colors['primary'], self.colors['secondary'], self.colors['tertiary'],
@@ -1378,9 +1598,11 @@ class CadencePlotter:
                 continue
 
             # Remove element 128 (index 127)
-            if len(y_vals) > 128:
-                x_vals = np.delete(x_vals, 128)
-                y_vals = np.delete(y_vals, 128)
+            if remove_code:
+                    removed_idx = len(y_vals)//2
+                    x_vals = np.delete(x_vals, removed_idx)
+                    y_vals = np.delete(y_vals, removed_idx)
+                    print(f"Removed code at index {removed_idx} for column {col + 1}")
 
             label = labels[col + 1] if col + 1 < len(labels) else ""
             corner, temp, vdd = extract_params(label)
@@ -1427,33 +1649,33 @@ class CadencePlotter:
                 continue
 
             # Format DNL subplot (top)
-            ax_dnl[corner].set_title(f"{clean_title} - DNL ({corner})", fontsize=14, fontweight='bold')
+            maybe_suptitle(ax_dnl[corner], f"{clean_title} - DNL ({corner})", fontsize=14, fontweight='bold')
             ax_dnl[corner].set_xlabel("Digital Code", fontsize=12, fontweight='bold')
             ax_dnl[corner].set_ylabel("DNL (LSB)", fontsize=12, fontweight='bold')
             self._apply_grid_styling(ax_dnl[corner], alpha=0.35)
             ax_dnl[corner].axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
             ax_dnl[corner].set_ylim(-1, 1)
-            ax_dnl[corner].legend(fontsize=9, framealpha=0.95, loc='best')
+            ax_dnl[corner].legend(bbox_to_anchor=(1.05, 1), fontsize=6, framealpha=0.95, loc='best')
 
             # Format INL subplot (bottom)
-            ax_inl[corner].set_title(f"{clean_title} - INL ({corner})", fontsize=14, fontweight='bold')
+            maybe_suptitle(ax_inl[corner], f"{clean_title} - INL ({corner})", fontsize=14, fontweight='bold')
             ax_inl[corner].set_xlabel("Digital Code", fontsize=12, fontweight='bold')
             ax_inl[corner].set_ylabel("INL (LSB)", fontsize=12, fontweight='bold')
             self._apply_grid_styling(ax_inl[corner], alpha=0.35)
             ax_inl[corner].axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
-            ax_inl[corner].legend(fontsize=9, framealpha=0.95, loc='best')
+            # ax_inl[corner].legend(fontsize=6, framealpha=0.95, loc='best')
 
             plt.tight_layout()
             save_path = self._get_save_path(filename, "Linearity", f"corner_dnl_inl_{corner.lower()}")
             self._save_figure(fig[corner], save_path)
             
             # Format and save sweep plot
-            ax_sweep[corner].set_title(f"Sweep Plot - Code vs Output Delay ({corner})", fontsize=14, fontweight='bold')
+            maybe_suptitle(ax_sweep[corner], f"Sweep Plot - Code vs Output Delay ({corner})", fontsize=14, fontweight='bold')
             ax_sweep[corner].set_xlabel("Digital Code", fontsize=12, fontweight='bold')
             ax_sweep[corner].set_ylabel("Output Delay (s)", fontsize=12, fontweight='bold')
             self._apply_grid_styling(ax_sweep[corner], alpha=0.35)
-            ax_sweep[corner].legend(fontsize=9, framealpha=0.95, loc='best')
-            
+            ax_sweep[corner].legend(bbox_to_anchor=(1.05, 1), fontsize=6, framealpha=0.95, loc='best')
+
             plt.tight_layout()
             save_path_sweep = self._get_save_path(filename, "Linearity", f"corner_sweep_{corner.lower()}")
             self._save_figure(fig_sweep[corner], save_path_sweep)
@@ -1466,23 +1688,25 @@ class CadencePlotter:
         if df is None: return None
         x_cols = [c for c in df.columns if c.endswith(' X')]
         y_cols = [c for c in df.columns if c.endswith(' Y')]
+        print(f"Found X columns: {x_cols}, Y columns: {y_cols} in {filename}")
         if not x_cols or not y_cols: return None
         
-        fig, ax = plt.subplots(figsize=(11, 6))
-        ax.plot(df[x_cols[0]], df[y_cols[0]], marker=None, color=self.colors['primary'], 
-               linewidth=2.6, label=y_cols[0].replace(' Y', ''))
+        fig, ax = plt.subplots()
+        ax.plot(df[x_cols[0]], df[y_cols[0]]*1e12, marker=None, 
+               linewidth=2.6)
         
         title = self._format_title(path.stem)
-        ax.set_title(f"Sweep: {title}", fontsize=14, fontweight='bold', pad=15)
-        ax.set_xlabel(x_label, fontsize=12, fontweight='bold')
-        ax.set_ylabel(y_cols[0].replace(' Y', ''), fontsize=12, fontweight='bold')
+        maybe_title(ax, f"Sweep: {title}"
+        , fontsize=14, fontweight='bold', pad=15)
+        ax.set_ylabel(r"Delay [ps]", fontsize=12, fontweight='bold')
+        ax.set_xlabel(r"$V_{dd} \, [V]$", fontsize=12, fontweight='bold')
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
 
         save_path = self._get_save_path(filename, path.name ,"generic_sweep")
         self._save_figure(fig, save_path)
-    
+        print(f"Saved generic sweep plot to {save_path}")
         plt.close()
 
     def plot_signals(self, filename, filters=None, t_range=None, subplots=False):
@@ -1517,10 +1741,15 @@ class CadencePlotter:
 
         # 3. Create Figure and Axes
         if subplots and num_signals > 1:
-            fig, axes = plt.subplots(num_signals, 1, sharex=True, figsize=(12, 4 * num_signals))
+            fig, axes = plt.subplots(
+                num_signals,
+                1,
+                sharex=True,
+                figsize=_multi_panel_figsize(num_signals, 1),
+            )
             if num_signals == 1: axes = [axes]
         else:
-            fig = plt.figure(figsize=(12, 6))
+            fig = plt.figure()
             axes = [plt.gca()] * num_signals # All point to same axis if subplots=False
 
         # 4. Plot each group
@@ -1545,7 +1774,7 @@ class CadencePlotter:
             
             clean_signal_name = self._format_title(base_name)
             ax.set_ylabel("Value", fontsize=11, fontweight='bold')
-            ax.set_title(f"Signal: {clean_signal_name}", fontsize=13, fontweight='bold', pad=10)
+            maybe_title(ax, f"Signal: {clean_signal_name}", fontsize=13, fontweight='bold', pad=10)
             ax.grid(True, alpha=0.3)
             ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=9)
             if t_range:
@@ -1598,10 +1827,15 @@ class CadencePlotter:
             unique_corners = sorted(df['base_corner'].unique())
             
             if subfigure:
-                fig, axes = plt.subplots(len(unique_corners), 1, figsize=(14, 6 * len(unique_corners)), sharex=True)
+                fig, axes = plt.subplots(
+                    len(unique_corners),
+                    1,
+                    figsize=_multi_panel_figsize(len(unique_corners), 1),
+                    sharex=True,
+                )
                 if len(unique_corners) == 1: axes = [axes]
             else:
-                fig = plt.figure(figsize=(14, 8))
+                fig = plt.figure()
                 axes = [plt.gca()] * len(unique_corners)
 
             group_cols = ['Corner', 'temperature', vdd_col] if VDD else ['Corner', 'temperature']
@@ -1641,14 +1875,14 @@ class CadencePlotter:
 
                 corner_label = self._format_title(f"{base_corner}")
                 if subfigure:
-                    ax.set_title(f"Corner: {corner_label}", fontsize=12, fontweight='bold', pad=10)
+                    maybe_title(ax, f"Corner: {corner_label}", fontsize=12, fontweight='bold', pad=10)
                 ax.set_ylabel(f"{y_label} ({unit})", fontsize=11, fontweight='bold')
                 ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.8)
                 ax.legend(bbox_to_anchor=(1.01, 1), loc='upper left', fontsize=9, framealpha=0.95)
                 ax.set_axisbelow(True)
 
             if not subfigure:
-                axes[0].set_title(f"{y_label} vs Digital Code", fontsize=14, fontweight='bold', pad=15)
+                maybe_suptitle(axes[0], f"{y_label} vs Digital Code", fontsize=14, fontweight='bold', pad=15)
             
             axes[-1].set_xlabel("Digital Code ($b_4b_3b_2b_1b_0$)", fontsize=11, fontweight='bold')
             axes[-1].tick_params(axis='x', rotation=45, labelsize=9)
@@ -1684,11 +1918,21 @@ class CadencePlotter:
         # 3. Dynamic Figure Setup
         if subplots:
             num_rows = len(unique_corners)
-            fig, axes = plt.subplots(num_rows, 2, figsize=(16, 5 * num_rows), sharex=True)
+            fig, axes = plt.subplots(
+                num_rows,
+                2,
+                figsize=_multi_panel_figsize(num_rows, 2),
+                sharex=True,
+            )
             # Ensure axes is 2D even if only one corner exists
             if num_rows == 1: axes = np.expand_dims(axes, axis=0)
         else:
-            fig, (ax_dnl, ax_inl) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+            fig, (ax_dnl, ax_inl) = plt.subplots(
+                2,
+                1,
+                figsize=_multi_panel_figsize(2, 1),
+                sharex=True,
+            )
             # Duplicate the axes references so the loop logic remains the same
             axes = [[ax_dnl, ax_inl]] * len(unique_corners)
 
@@ -1716,12 +1960,11 @@ class CadencePlotter:
                                marker='o', markersize=3, alpha=0.7, linewidth=2)
                 cur_ax_inl.plot(x_labels, inl, label=lbl, color=color, linestyle=style, 
                                marker='o', markersize=3, alpha=0.7, linewidth=2)
-
             # Labels for Subplot Mode
             if subplots:
                 corner_label = self._format_title(f"{base_corner}")
-                cur_ax_dnl.set_title(f"DNL - {corner_label}", fontsize=12, fontweight='bold', pad=10)
-                cur_ax_inl.set_title(f"INL - {corner_label}", fontsize=12, fontweight='bold', pad=10)
+                maybe_suptitle(cur_ax_dnl, f"DNL - {corner_label}", fontsize=12, fontweight='bold', pad=10)
+                maybe_suptitle(cur_ax_inl, f"INL - {corner_label}", fontsize=12, fontweight='bold', pad=10)
                 cur_ax_inl.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=9, framealpha=0.95)
             
             # Add reference lines
@@ -1737,9 +1980,9 @@ class CadencePlotter:
 
         # 5. Global Formatting
         if not subplots:
-            axes[0][0].set_title("Differential Non-Linearity (DNL)", fontsize=14, fontweight='bold', pad=15)
-            axes[0][1].set_title("Integral Non-Linearity (INL)", fontsize=14, fontweight='bold', pad=15)
-            axes[0][0].legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=10, framealpha=0.95)
+            maybe_suptitle(axes[0][0], "Differential Non-Linearity (DNL)", fontsize=14, fontweight='bold', pad=15)
+            maybe_suptitle(axes[0][1], "Integral Non-Linearity (INL)", fontsize=14, fontweight='bold', pad=15)
+            axes[0][0].legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=6, framealpha=0.95)
             
             axes[0][0].set_ylabel("DNL (LSB)", fontsize=12, fontweight='bold')
             axes[0][1].set_ylabel("INL (LSB)", fontsize=12, fontweight='bold')
@@ -1771,6 +2014,7 @@ class CadencePlotter:
             "corner_temp": "Corner temperature sweep",
             "corner_linearity": "Corner DNL/INL",
             "generic": "Generic single X/Y sweep",
+            "phase_noise": "Phase noise comparison (CS vs VS)",
             "pvt_sweep": "PVT sweep",
             "pvt_linearity": "PVT linearity",
         }
@@ -1778,6 +2022,8 @@ class CadencePlotter:
     def plot_file(self, filename, plot_type="auto", **kwargs):
         """Single entry point for plotting a file by explicit plot type."""
         plot_type = (plot_type or "auto").lower().strip()
+
+        print(f"Plotting '{filename}' with plot type '{plot_type}'...")
 
         if plot_type == "linearity":
             df_preview, _ = self.load_data(filename)
@@ -1791,7 +2037,7 @@ class CadencePlotter:
                         y_col_idx=kwargs.get("y_col_idx", 1),
                         remove_code=kwargs.get("remove_code", True),
                     )
-
+        print(kwargs.get("remove_code"))
         dispatch = {
             "auto": lambda: self.smart_plot(filename),
             "sweep": lambda: self.plot_digital_sweep(filename, max_iterations=kwargs.get("max_iterations", 200)),
@@ -1803,15 +2049,15 @@ class CadencePlotter:
                 subplots=kwargs.get("subplots", False),
             ),
             "histogram": lambda: self.plot_histogram(filename),
-            "mc_sweep": lambda: self.plot_mc_sweep_all_realizations(filename, max_realizations=kwargs.get("max_realizations", 200)),
-            "mc_linearity": lambda: self.plot_mc_linearity_all_realizations_xy(filename, max_realizations=kwargs.get("max_realizations", 200)),
+            "mc_sweep": lambda: self.plot_mc_sweep_all_realizations(filename, max_realizations=kwargs.get("max_realizations", 200), remove_code=kwargs.get("remove_code", True)),
+            "mc_linearity": lambda: self.plot_mc_linearity_all_realizations_xy(filename, max_realizations=kwargs.get("max_realizations", 200), remove_code=kwargs.get("remove_code", True)),
             "mc_linearity_iteration": lambda: self.plot_mc_linearity_per_iteration(
                 filename,
                 lsb_ns=kwargs.get("lsb_ns"),
-                max_iterations=kwargs.get("max_iterations", 200),
+                max_iterations=kwargs.get("max_iterations", 200), remove_code=kwargs.get("remove_code", True)
             ),
-            "mcparamset_sweep": lambda: self.plot_mcparamset_sweep(filename, max_realizations=kwargs.get("max_realizations", 200)),
-            "mcparamset_linearity": lambda: self.plot_mcparamset_linearity(filename, max_realizations=kwargs.get("max_realizations", 200)),
+            "mcparamset_sweep": lambda: self.plot_mcparamset_sweep(filename, max_realizations=kwargs.get("max_realizations", 200), remove_code=kwargs.get("remove_code", True)),
+            "mcparamset_linearity": lambda: self.plot_mcparamset_linearity(filename, max_realizations=kwargs.get("max_realizations", 200), remove_code=kwargs.get("remove_code", True)),
             "direct_csv": lambda: self.plot_direct_csv_sweep(
                 filename,
                 y_col_idx=kwargs.get("y_col_idx", 1),
@@ -1826,8 +2072,17 @@ class CadencePlotter:
                 P_static=kwargs.get("P_static", 0),
             ),
             "corner_temp": lambda: self.plot_corner_temperature_sweep(filename),
-            "corner_linearity": lambda: self.plot_corner_linearity_xy(filename),
+            "corner_linearity": lambda: self.plot_corner_linearity_xy(filename, remove_code=kwargs.get("remove_code", True)),
             "generic": lambda: self.plot_generic_sweep(filename),
+            "phase_noise": lambda: self.plot_phase_noise_comparison(
+                kwargs.get("file_a") or kwargs.get("cs_file"),
+                kwargs.get("file_b") or kwargs.get("vs_file"),
+                title=kwargs.get("phase_noise_title"),
+                log_x=not kwargs.get("no_log_x", False),
+                carrier_hz=kwargs.get("carrier_hz"),
+                label_a=kwargs.get("label_a"),
+                label_b=kwargs.get("label_b"),
+            ),
             "pvt_sweep": lambda: self.plot_pvt_sweep(filename, subfigure=kwargs.get("subfigure", False), VDD=kwargs.get("vdd", False)),
             "pvt_linearity": lambda: self.plot_pvt_linearity(filename, subplots=kwargs.get("subplots", False)),
         }
@@ -2098,6 +2353,15 @@ def build_cli_parser():
     parser.add_argument("--vdd", action="store_true")
     parser.add_argument("--filters", nargs='*', default=None, help="Signal filters (for signals plot)")
     parser.add_argument("--t-range", type=_parse_t_range, default=None, help="Time range: start,stop")
+    parser.add_argument("--cs-file", help="CS phase noise CSV filename")
+    parser.add_argument("--vs-file", help="VS phase noise CSV filename")
+    parser.add_argument("--file-a", help="Phase noise file A (optional)")
+    parser.add_argument("--file-b", help="Phase noise file B (optional)")
+    parser.add_argument("--label-a", default=None, help="Legend label for file A")
+    parser.add_argument("--label-b", default=None, help="Legend label for file B")
+    parser.add_argument("--phase-noise-title", default=None, help="Optional title for phase noise comparison")
+    parser.add_argument("--no-log-x", action="store_true", help="Use linear X axis for phase noise")
+    parser.add_argument("--carrier-hz", type=float, default=None, help="Carrier frequency in Hz for jitter integration")
 
     return parser
 
@@ -2145,7 +2409,7 @@ def main():
         process_coarse_fine()
         return
 
-    if not args.file:
+    if not args.file and args.type != "phase_noise":
         parser.error("Provide --file for single-file plotting, or use --task / --all-tasks")
 
     plotter.plot_file(
@@ -2165,6 +2429,15 @@ def main():
         vdd=args.vdd,
         filters=args.filters,
         t_range=args.t_range,
+        cs_file=args.cs_file,
+        vs_file=args.vs_file,
+        file_a=args.file_a,
+        file_b=args.file_b,
+        label_a=args.label_a,
+        label_b=args.label_b,
+        phase_noise_title=args.phase_noise_title,
+        no_log_x=args.no_log_x,
+        carrier_hz=args.carrier_hz,
     )
 
 

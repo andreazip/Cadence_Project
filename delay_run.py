@@ -4,7 +4,7 @@ matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from plot_style import apply_science_style
+from plot_style import apply_science_style, _multi_panel_figsize
 
 
 apply_science_style()
@@ -283,7 +283,7 @@ def plot_delay_system(delay_range_ns=150, f_cnt=100e6, C_load=10e-15, f_DTC=20e6
 
     actual_delays = np.array(actual_delays)
 
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, ax = plt.subplots()
     ax.plot(actual_delays, actual_delays, color='#D62728', linewidth=2.6, label='System Delay (Counter + DTC)')
 
     for transition in counter_transitions:
@@ -344,7 +344,7 @@ def plot_delay_vs_code(config=None, save_path=None):
     delays_ns = np.delete(delays, mid_code) * 1e9
     
     # Create figure
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots()
     ax.plot(codes_shifted, delays_ns, color='#D62728', linewidth=2.6, label='DTC Delay')
     
     ax.set_title('DTC Delay Characteristic vs Digital Code', fontsize=14, fontweight='bold', pad=12)
@@ -398,7 +398,7 @@ def plot_power_vs_code(config=None, save_path=None):
     powers_uw = np.delete(powers, mid_code) * 1e6
     
     # Create figure
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots()
     ax.plot(codes_shifted, powers_uw, color='#1F77B4', linewidth=2.6, label='DTC Power')
     
     ax.set_title('DTC Power Consumption vs Digital Code', fontsize=14, fontweight='bold', pad=12)
@@ -447,7 +447,7 @@ def plot_delay_comparison(configs_dict, save_path=None):
     codes_shifted = np.arange(N - 1)
     
     # Create figure
-    fig, ax = plt.subplots(figsize=(11, 6))
+    fig, ax = plt.subplots()
     
     for idx, (label, config) in enumerate(configs_dict.items()):
         # Calculate delay for each code
@@ -539,7 +539,7 @@ def run_mc_mismatch_analysis(mc_runs=100, config=None, dnl_limit_lsb=0.5, save_p
     dnl_peaks = []
     lsb_last = None
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=_multi_panel_figsize(2, 1))
 
     for mc in range(mc_runs):
         c_array_mc = np.array([(2**j) * (Cu + np.random.randn() * sigma_c) for j in range(n - 1)])

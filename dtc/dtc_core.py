@@ -4,7 +4,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from plot_style import apply_science_style, _multi_panel_figsize
+from plot_style import apply_science_style, _multi_panel_figsize, maybe_title, maybe_suptitle
 
 
 apply_science_style()
@@ -33,6 +33,7 @@ class ConstantSlopeDTC:
         i1,
         c1,
         c2,
+        self_power_down,
     ):
         self.n_bits = n_bits
         self.m = n_bits - 1
@@ -50,6 +51,7 @@ class ConstantSlopeDTC:
         self.i1 = i1
         self.c1 = c1
         self.c2 = c2
+        self.self_power_down = self_power_down
 
     def build_dac_array(self, mismatch_enable=False, sigma=None):
         sigma_val = self.sigma_c if sigma is None else sigma
@@ -58,8 +60,8 @@ class ConstantSlopeDTC:
         if mode_key == "binary":
             arr = np.zeros(self.m)
             for j in range(self.m):
-                mismatch = np.random.randn() * sigma_val / np.sqrt(2**j) if mismatch_enable else 0.0
-                arr[j] = (2**j) * (self.cu + mismatch)
+                units = self.cu + np.random.randn(2**j) * sigma_val #generate 2**j units
+                arr[j] = np.sum(units)
             return arr
 
         if mode_key == "thermometer":
@@ -76,15 +78,15 @@ class ConstantSlopeDTC:
 
             arr_bin = np.zeros(b)
             for j in range(b):
-                mismatch = np.random.randn() * sigma_val / np.sqrt(2**j) if mismatch_enable else 0.0
-                arr_bin[j] = (2**j) * (self.cu + mismatch)
-
+                units = self.cu + np.random.randn(2**j) * sigma_val #generate 2**j units
+                arr_bin[j] = np.sum(units)
+            
             n_units = (2**t) - 1
             unit_val_ideal = (2**b) * self.cu
             arr_therm = np.zeros(n_units)
             for j in range(n_units):
-                mismatch = np.random.randn() * sigma_val * np.sqrt(2**b) if mismatch_enable else 0.0
-                arr_therm[j] = unit_val_ideal + mismatch
+                units = self.cu + np.random.randn(2**b) * sigma_val #generate 2**j units
+                arr_therm[j] = np.sum(units)
 
             return np.concatenate([arr_bin, arr_therm])
 
@@ -126,11 +128,17 @@ class ConstantSlopeDTC:
 
         raise ValueError("dac_mode must be 'binary', 'thermometer', or 'segmented'")
 
-    def energy_msb_0(self, c_k, c0, ca, Vst):
-        return (c0 + self.cramp + (ca - c_k)) * (c_k / (c0 + self.cramp + ca)) * self.vdd**2  + self.cramp * (self.vdd**2-(self.vdd)*self.vdd + (self.vdd/2)**2)
+    def energy_msb_0(self, c_k, c0, ca, Vst, self_power_down):
+        if self_power_down:
+            return (c0 + self.cramp+ (ca - c_k)) * (c_k / (c0 + self.cramp  + ca)) * self.vdd**2 + self.cramp/2*(self.vdd**2/2+ Vst*(Vst-self.vdd)) #1/4 *self.cramp * self.vdd**2/4 + self.cramp/4 * (Vst**2 - (self.vdd/2)**2)
+        else:
+            return (c0 + self.cramp+ (ca - c_k)) * (c_k / (c0 + self.cramp  + ca)) * self.vdd**2  + self.cramp/2 * (self.vdd**2+ Vst**2)
 
-    def energy_msb_1(self, ca, c_k, c0, Vst):
-        return (ca - c_k) / (c0 + ca) * (c0 + c_k) * self.vdd**2 + self.cramp * (Vst**2-Vst*(self.vdd) + (self.vdd/2)**2)
+    def energy_msb_1(self, ca, c_k, c0, Vst, self_power_down):
+        if self_power_down:
+            return (ca - c_k) / (c0 + ca+self.cramp) * (c0 + c_k+self.cramp) * self.vdd**2 + self.cramp/2*(self.vdd**2/2+ Vst*(Vst-self.vdd))#1/2 *self.cramp * self.vdd**2/4 + self.cramp/2 * (Vst**2 - (self.vdd/2)**2)
+        else:
+            return (ca - c_k) / (c0 + ca + self.cramp) * (c0 + c_k+self.cramp) * self.vdd**2  + self.cramp/2 * (self.vdd**2+ Vst**2)
 
     def compute_vst_energy(self, cap_array, c0, cramp):
         ca = np.sum(cap_array)
@@ -141,10 +149,10 @@ class ConstantSlopeDTC:
             c_k = self.calc_ck(i, cap_array)
             if i > self.half:
                 vst_array[i] = (1 + (ca - c_k ) / (c0 + cramp + ca)) * self.vdd
-                energy_array[i] = self.energy_msb_1(ca, c_k, c0, vst_array[i])
+                energy_array[i] = self.energy_msb_1(ca, c_k, c0, vst_array[i], self.self_power_down)
             else:
                 vst_array[i] = (1 - (c_k) / (c0 + cramp + ca)) * self.vdd
-                energy_array[i] = self.energy_msb_0(c_k, c0, ca, vst_array[i])
+                energy_array[i] = self.energy_msb_0(c_k, c0, ca, vst_array[i], self.self_power_down)
 
         return vst_array, energy_array, ca
 
@@ -228,15 +236,15 @@ class VariableSlopeDTC:
         if mode_key == "binary":
             arr = np.zeros(self.m)
             for j in range(self.m):
-                mismatch = np.random.randn() * sigma_val / np.sqrt(2**j) if mismatch_enable else 0.0
-                arr[j] = (2**j) * (self.cramp_u + mismatch)
+                units = self.cramp_u + np.random.randn(2**j) * sigma_val #generate 2**j units
+                arr[j] = np.sum(units)
             return arr
 
         if mode_key == "thermometer":
             n_units = (2**self.m) - 1
             arr = np.zeros(n_units)
             for j in range(n_units):
-                mismatch = np.random.randn() * sigma_val if mismatch_enable else 0.0
+                mismatch = np.random.randn() * sigma_val  if mismatch_enable else 0.0
                 arr[j] = self.cramp_u + mismatch
             return arr
 
@@ -246,15 +254,15 @@ class VariableSlopeDTC:
 
             arr_bin = np.zeros(b)
             for j in range(b):
-                mismatch = np.random.randn() * sigma_val / np.sqrt(2**j) if mismatch_enable else 0.0
-                arr_bin[j] = (2**j) * (self.cramp_u + mismatch)
+                units = self.cramp_u + np.random.randn(2**j) * sigma_val #generate 2**j units
+                arr_bin[j] = np.sum(units)
 
             n_units = (2**t) - 1
             unit_val_ideal = (2**b) * self.cramp_u
             arr_therm = np.zeros(n_units)
             for j in range(n_units):
-                mismatch = np.random.randn() * sigma_val * np.sqrt(2**b) if mismatch_enable else 0.0
-                arr_therm[j] = unit_val_ideal + mismatch
+                units = self.cramp_u + np.random.randn(2**b) * sigma_val #generate 2**t units
+                arr_therm[j] = np.sum(units)
 
             return np.concatenate([arr_bin, arr_therm])
 
@@ -296,7 +304,7 @@ class VariableSlopeDTC:
 
     def energy(self, c_k):
         power_scale = 0.25 if self.self_power_down else 1.0
-        return c_k * self.vdd**2 * power_scale
+        return (c_k + self.C_fixed) * self.vdd**2 * power_scale
 
     def compute_delay(self, vst_array, cap_array, clm_enabled=None, nonlin_enabled=None, ich_val=None):
         if clm_enabled is None:
@@ -392,13 +400,14 @@ class DelayLineDTC:
             energy = energy / 4.0
         return energy
     
-    def compute_delay(self, vst_array, clm_enabled=None, nonlin_enabled=None, ich_val=None):
+    def compute_delay(self, vst_array, clm_enabled=None, nonlin_enabled=None, ich_val=None, cramp_val=None):
         if clm_enabled is None:
             clm_enabled = self.run_flags["CLM"]
         if nonlin_enabled is None:
             nonlin_enabled = self.run_flags["Non-linearities-capacitor"]
 
         ich_base = self.ich if ich_val is None else ich_val
+        cramp_base = self.cramp if cramp_val is None else cramp_val
 
         delay = np.zeros(len(vst_array))
         ich_array = np.zeros(len(vst_array))
@@ -407,18 +416,17 @@ class DelayLineDTC:
 
         for i, vst in enumerate(vst_array):
             ich_eff = ich_base
-            cramp = self.cramp
-            energy_array[i] = self.energy(cramp)
+            cramp_eff = cramp_base
+            energy_array[i] = self.energy(cramp_eff)
 
             if clm_enabled:
                 ich_eff = ich_base * (1 + self.i1 * (vst - 0.4))
                 ich_array[i] = ich_eff
 
             if nonlin_enabled:
-                cramp_eff = cramp_eff * (1 + self.c1 * vst + self.c2 * vst**2)
-                cramp_array[i] = cramp_eff
-            else:
-                cramp_array[i] = cramp_eff
+                cramp_eff = cramp_base * (1 + self.c1 * vst + self.c2 * vst**2)
+
+            cramp_array[i] = cramp_eff
 
             delay[i] = cramp_eff * (self.vdd - self.vth) / ich_eff
 
@@ -451,7 +459,7 @@ def plot_delay_power(codes, delay_s, power_w, out_dir, name_prefix):
     fig_delay = plt.figure()
     ax = fig_delay.add_subplot(111)
     ax.plot(codes, delay_s * 1e9, color='#D62728', linewidth=2.6, label='Delay')
-    ax.set_title(f'{name_prefix} Delay vs Digital Code', fontsize=14, fontweight='bold', pad=12)
+    maybe_title(ax,f'{name_prefix} Delay vs Digital Code', fontsize=14, fontweight='bold', pad=12)
     ax.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
     ax.set_ylabel('Delay [ns]', fontsize=12, fontweight='bold')
     ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
@@ -463,9 +471,9 @@ def plot_delay_power(codes, delay_s, power_w, out_dir, name_prefix):
     fig_power = plt.figure()
     ax = fig_power.add_subplot(111)
     ax.plot(codes, power_w * 1e6, color='#1F77B4', linewidth=2.6, label='Power')
-    ax.set_title(f'{name_prefix} Power vs Digital Code', fontsize=14, fontweight='bold', pad=12)
+    maybe_title(ax,f'{name_prefix} Power vs Digital Code', fontsize=14, fontweight='bold', pad=12)
     ax.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Power [uW]', fontsize=12, fontweight='bold')
+    ax.set_ylabel(r'Power [$\mu W$]', fontsize=12, fontweight='bold')
     ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax.set_axisbelow(True)
     ax.legend(fontsize=10, framealpha=0.96, edgecolor='black')
@@ -475,6 +483,8 @@ def plot_delay_power(codes, delay_s, power_w, out_dir, name_prefix):
 
 def plot_mc_dnl_inl(mc_delay_list, out_dir, name_prefix, n_runs):
     fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=_multi_panel_figsize(2, 1))
+    fig_dnl, ax_dnl = plt.subplots(figsize=_multi_panel_figsize(1, 1))
+    fig_inl, ax_inl = plt.subplots(figsize=_multi_panel_figsize(1, 1))
 
     for idx, delay_s in enumerate(mc_delay_list):
         dnl, inl, _ = compute_dnl_inl(delay_s)
@@ -482,10 +492,12 @@ def plot_mc_dnl_inl(mc_delay_list, out_dir, name_prefix, n_runs):
         alpha_value = 0.15 + (idx / max(len(mc_delay_list) - 1, 1)) * 0.45
         ax1.plot(x, dnl, color='#D62728', linewidth=1.5, alpha=alpha_value)
         ax2.plot(x, inl, color='#1F77B4', linewidth=1.5, alpha=alpha_value)
+        ax_dnl.plot(x, dnl, color='#D62728', linewidth=1.5, alpha=alpha_value)
+        ax_inl.plot(x, inl, color='#1F77B4', linewidth=1.5, alpha=alpha_value)
 
     ax1.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
     ax1.set_ylabel('DNL (LSB)', fontsize=12, fontweight='bold')
-    ax1.set_title(f'{name_prefix} Monte Carlo DNL/INL ({n_runs} realizations)', fontsize=14, fontweight='bold', pad=12)
+    maybe_suptitle(ax1, f'{name_prefix} Monte Carlo DNL/INL ({n_runs} realizations)', fontsize=14, fontweight='bold', pad=12)
     ax1.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax1.set_axisbelow(True)
 
@@ -495,9 +507,31 @@ def plot_mc_dnl_inl(mc_delay_list, out_dir, name_prefix, n_runs):
     ax2.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax2.set_axisbelow(True)
 
+    ax_dnl.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
+    ax_dnl.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
+    ax_dnl.set_ylabel('DNL (LSB)', fontsize=12, fontweight='bold')
+    maybe_title(ax_dnl, f'{name_prefix} Monte Carlo DNL ({n_runs} realizations)', fontsize=14, fontweight='bold', pad=12)
+    ax_dnl.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
+    ax_dnl.set_axisbelow(True)
+
+    ax_inl.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
+    ax_inl.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
+    ax_inl.set_ylabel('INL (LSB)', fontsize=12, fontweight='bold')
+    maybe_title(ax_inl, f'{name_prefix} Monte Carlo INL ({n_runs} realizations)', fontsize=14, fontweight='bold', pad=12)
+    ax_inl.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
+    ax_inl.set_axisbelow(True)
+
     plt.tight_layout()
     save_figure_to(fig, f'{name_prefix.lower().replace(" ", "_")}_mc_dnl_inl_{n_runs}runs.png', out_dir)
     plt.close(fig)
+
+    fig_dnl.tight_layout()
+    save_figure_to(fig_dnl, f'{name_prefix.lower().replace(" ", "_")}_mc_dnl_{n_runs}runs.png', out_dir)
+    plt.close(fig_dnl)
+
+    fig_inl.tight_layout()
+    save_figure_to(fig_inl, f'{name_prefix.lower().replace(" ", "_")}_mc_inl_{n_runs}runs.png', out_dir)
+    plt.close(fig_inl)
 
 
 def plot_aux_effects(codes, ich_s, cramp_s, out_dir, name_prefix):
@@ -506,7 +540,7 @@ def plot_aux_effects(codes, ich_s, cramp_s, out_dir, name_prefix):
         fig_current = plt.figure()
         ax = fig_current.add_subplot(111)
         ax.plot(codes, ich_s * 1e9, color='#2CA02C', linewidth=2.6, label='Effective Current')
-        ax.set_title(f'{name_prefix} Effective Current vs Digital Code', fontsize=14, fontweight='bold', pad=12)
+        maybe_title(ax,f'{name_prefix} Effective Current vs Digital Code', fontsize=14, fontweight='bold', pad=12)
         ax.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
         ax.set_ylabel('Current [nA]', fontsize=12, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
@@ -519,7 +553,7 @@ def plot_aux_effects(codes, ich_s, cramp_s, out_dir, name_prefix):
         fig_cap = plt.figure()
         ax = fig_cap.add_subplot(111)
         ax.plot(codes, cramp_s * 1e15, color='#FF7F0E', linewidth=2.6, label='Effective Ramp Capacitance')
-        ax.set_title(f'{name_prefix} Ramp Capacitance vs Digital Code', fontsize=14, fontweight='bold', pad=12)
+        maybe_title(ax,f'{name_prefix} Ramp Capacitance vs Digital Code', fontsize=14, fontweight='bold', pad=12)
         ax.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
         ax.set_ylabel('Capacitance [fF]', fontsize=12, fontweight='bold')
         ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")

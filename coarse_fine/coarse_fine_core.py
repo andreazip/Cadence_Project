@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from dtc.dtc_core import ConstantSlopeDTC, DelayLineDTC, VariableSlopeDTC, compute_sigma_c
-from plot_style import apply_science_style, _multi_panel_figsize
+from plot_style import apply_science_style, _multi_panel_figsize, maybe_title, maybe_suptitle
 
 
 apply_science_style()
@@ -59,13 +59,14 @@ class DTCConfig:
 
     # Optional extra power reduction factor (divide by 4 when enabled), split by mode.
     # If these are not provided, legacy `self_power_down` is used as fallback.
+    self_power_down_cs: Optional[Union[bool, str]] = None
     self_power_down_vs: Optional[Union[bool, str]] = None
     self_power_down_dl: Optional[Union[bool, str]] = None
     # Legacy unified switch kept for backward compatibility.
     self_power_down: Union[bool, str] = True
 
     # Mismatch parameters: sigma(Cu)/Cu = Ac/sqrt(A)
-    Ac: float = 5.218e-3
+    Ac: float = 5.6e-3
     A: float = 4.33
 
 
@@ -111,10 +112,10 @@ class DTCModel:
         spd_fallback = self.config.self_power_down
         spd_vs = self.config.self_power_down_vs
         spd_dl = self.config.self_power_down_dl
-
+        spd_cs = self.config.self_power_down_cs
         self._self_power_down_vs = _to_bool(spd_vs if spd_vs is not None else spd_fallback)
         self._self_power_down_dl = _to_bool(spd_dl if spd_dl is not None else spd_fallback)
-
+        self._self_power_down_cs = _to_bool(spd_cs if spd_cs is not None else spd_fallback)
         self._run_flags = {
             "CLM": self.config.enable_CLM,
             "Non-linearities-capacitor": self.config.enable_nonlin,
@@ -167,6 +168,7 @@ class DTCModel:
             i1=self.config.I1,
             c1=self.config.C1,
             c2=self.config.C2,
+            self_power_down=self._self_power_down_cs,
         )
         # VS core uses one full n-bit DAC bank.
         self._vs_core = VariableSlopeDTC(
@@ -224,10 +226,10 @@ class DTCModel:
             return (1 + (self._ca - c_k) / (self._c0 + self.config.Cramp + self._ca)) * self.config.Vdd
         return (1 - c_k / (self._c0 + self.config.Cramp + self._ca)) * self.config.Vdd
 
-    def _compute_energy_cs(self, msb: int, c_k: float, vst: float) -> float:
+    def _compute_energy_cs(self, msb: int, c_k: float, vst: float, self_power_down: bool) -> float:
         if msb == 1:
-            return float(self._cs_core.energy_msb_1(self._ca, c_k, self._c0, vst))
-        return float(self._cs_core.energy_msb_0(c_k, self._c0, self._ca, vst))
+            return float(self._cs_core.energy_msb_1(self._ca, c_k, self._c0, vst, self_power_down))
+        return float(self._cs_core.energy_msb_0(c_k, self._c0, self._ca, vst, self_power_down))
 
     def evaluate(self, code: int) -> Tuple[float, float]:
         """Return (delay_s, power_w) for a single digital code."""
@@ -242,7 +244,7 @@ class DTCModel:
         if self._slope_mode == "constant":
             c_k = self._calc_ck_constant_slope(lsb_code)
             vst = self._compute_vst_cs(msb, c_k)
-            energy = self._compute_energy_cs(msb, c_k, vst)
+            energy = self._compute_energy_cs(msb, c_k, vst, self._self_power_down_cs)
             cramp_nom = self.config.Cramp
         elif self._slope_mode == "variable":
             # VS mode: one n-bit DAC controls effective ramp capacitance directly.
@@ -285,9 +287,9 @@ class DTCModel:
         power = energy * self.config.f
 
         if self._slope_mode == "variable" and self._self_power_down_vs:
-            power = power / 4.0
+            power = power / 2.0
         elif self._slope_mode == "delay_line" and self._self_power_down_dl:
-            power = power / 4.0
+            power = power / 2.0
 
         return float(delay), float(power)
 
@@ -637,9 +639,9 @@ class CoarseFineDTC:
         if len(delays_ns) == 0:
             raise ValueError("No realizable delay points in requested delay_range_ns")
 
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots()
         ax.plot(delays_ns, powers_uw, color='#1F77B4', linewidth=2.2)
-        ax.set_title('Coarse-Fine DTC Total Power vs Target Delay', fontsize=14, fontweight='bold', pad=12)
+        maybe_title(ax,'Coarse-Fine DTC Total Power vs Target Delay', fontsize=14, fontweight='bold', pad=12)
         ax.set_xlabel('Target Delay [ns]', fontsize=12, fontweight='bold')
         ax.set_ylabel('Total Power [uW]', fontsize=12, fontweight='bold')
         ax.set_xlim(float(np.min(delays_ns)), float(np.max(delays_ns)))
@@ -672,26 +674,16 @@ class CoarseFineDTC:
             delays_ns = delays_ns[keep]
             coarse_marker = coarse_marker[keep]
 
-        fig, ax = plt.subplots(figsize=(11, 6))
-        ax.plot(codes, delays_ns, color='#D62728', linewidth=2.6, label='Coarse-Fine Delay Characteristic')
-        ax.plot(
-            codes[coarse_marker],
-            delays_ns[coarse_marker],
-            'o',
-            color='#1F77B4',
-            markersize=7,
-            markeredgewidth=1.2,
-            markeredgecolor='white',
-            label='Coarse Transition',
-            zorder=5,
-        )
-        ax.set_title('Coarse-Fine Delay Characteristic vs Combined Code', fontsize=14, fontweight='bold', pad=12)
-        ax.set_xlabel('Combined Code', fontsize=12, fontweight='bold')
+        fig, ax = plt.subplots()
+        ax.plot(codes, delays_ns, color='#D62728', linewidth=2.6)
+        
+        maybe_title(ax, 'Coarse-Fine Delay Characteristic vs Combined Code', fontweight='bold', pad=12)
+        ax.set_xlabel('Code', fontsize=12, fontweight='bold')
         ax.set_ylabel('Delay [ns]', fontsize=12, fontweight='bold')
         if t_range_ns is not None:
-            ax.set_ylim(0, t_range_ns)
+            ax.set_ylim(0, 6)
         else:
-            ax.set_ylim(0, float(np.max(delays_ns)))
+            ax.set_ylim(0, 6)
         ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
         ax.set_axisbelow(True)
         ax.legend(fontsize=10, framealpha=0.96, edgecolor='black', loc='best')
@@ -718,17 +710,16 @@ class CoarseFineDTC:
 
         p_avg_uw = float(np.mean(powers_uw)) if len(powers_uw) > 0 else 0.0
 
-        fig, ax = plt.subplots(figsize=(11, 6))
+        fig, ax = plt.subplots()
         ax.plot(
             codes,
             powers_uw,
             color='#1F77B4',
             linewidth=2.6,
-            label=f'Coarse-Fine Total Power (P_avg = {p_avg_uw:.3f} uW)',
         )
-        ax.set_title('Coarse-Fine Total Power vs Combined Code', fontsize=14, fontweight='bold', pad=12)
-        ax.set_xlabel('Combined Code', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Total Power [uW]', fontsize=12, fontweight='bold')
+        maybe_title(ax, 'Coarse-Fine Total Power vs Combined Code', fontsize=14, fontweight='bold', pad=12)
+        ax.set_xlabel('Code', fontsize=12, fontweight='bold')
+        ax.set_ylabel(r'$P_{tot} [\mu W]$', fontsize=12, fontweight='bold')
         if len(codes) > 0:
             ax.set_xlim(0, int(codes[-1]))
         ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
@@ -774,9 +765,9 @@ class CoarseFineDTC:
             code_axis = code_axis[keep]
             delay_ns = delay_ns[keep]
 
-        fig, ax = plt.subplots(figsize=(11, 6))
+        fig, ax = plt.subplots()
         ax.plot(code_axis, delay_ns, color=color, linewidth=2.6, label=label)
-        ax.set_title(title, fontsize=14, fontweight='bold', pad=12)
+        maybe_title(ax, title, fontsize=14, fontweight='bold', pad=12)
         ax.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
         ax.set_ylabel('Delay [ns]', fontsize=12, fontweight='bold')
         if t_range_ns is not None:
@@ -819,7 +810,7 @@ class CoarseFineDTC:
             active_codes = self._active_fine_codes()
             title_prefix = 'Fine DTC'
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
+        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=_multi_panel_figsize(2, 1))
         dnl_peaks = []
         lsb_last = None
         pass_count = 0
@@ -852,7 +843,7 @@ class CoarseFineDTC:
 
         ax1.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
         ax1.set_ylabel('DNL (LSB)', fontsize=12, fontweight='bold')
-        ax1.set_title(
+        maybe_suptitle(ax1,
             f'{title_prefix} Monte Carlo Non-Linearity ({mc_runs} runs, LSB = {lsb_last:.2e})',
             fontsize=14,
             fontweight='bold',
@@ -891,7 +882,7 @@ class CoarseFineDTC:
         rng = np.random.default_rng()
         active_codes = self._active_coarse_codes()
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
+        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=_multi_panel_figsize(2, 1))
 
         for mc in range(mc_runs):
             mc_model = self.coarse.with_cap_mismatch(rng)
@@ -915,7 +906,7 @@ class CoarseFineDTC:
 
         ax1.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
         ax1.set_ylabel('DNL Error [ps]', fontsize=12, fontweight='bold')
-        ax1.set_title(
+        maybe_suptitle(ax1,
             f'Coarse DTC Monte Carlo Non-Linearity ({mc_runs} runs, Error in ps)',
             fontsize=14,
             fontweight='bold',
@@ -1000,7 +991,7 @@ class CoarseFineDTC:
         else:
             code_list = [int(c) for c in codes]
 
-        fig, ax = plt.subplots(figsize=(11, 6))
+        fig, ax = plt.subplots()
         colors = ['#D62728', '#1F77B4', '#2CA02C', '#FF7F0E', '#8C564B']
 
         for idx, code in enumerate(code_list):
@@ -1102,7 +1093,7 @@ def run_mc_mismatch_analysis(
     dnl_limit_lsb: float = 0.5,
     t_range_ns: Optional[float] = None,
     save_path: Optional[str] = None,
-) -> Tuple[plt.Figure, Tuple[plt.Axes, plt.Axes], Dict[str, float]]:
+) -> Dict[str, float]:
     """
     Monte Carlo mismatch analysis (DNL/INL cloud) for coarse-fine DTC.
 
@@ -1113,7 +1104,8 @@ def run_mc_mismatch_analysis(
     coarse_nom = DTCModel(DTCConfig(**coarse_values))
     fine_nom = DTCModel(DTCConfig(**fine_values))
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
+    fig_dnl, ax_dnl = plt.subplots(figsize=_multi_panel_figsize(1, 1))
+    fig_inl, ax_inl = plt.subplots(figsize=_multi_panel_figsize(1, 1))
     dnl_peaks = []
     passing_runs = 0
     lsb_last = None
@@ -1151,34 +1143,45 @@ def run_mc_mismatch_analysis(
         codes_inl = codes
 
         alpha_value = 0.15 + (mc / max(mc_runs - 1, 1)) * 0.5
-        ax1.plot(codes_dnl, dnl, alpha=alpha_value, linewidth=1.6, color='#D62728')
-        ax2.plot(codes_inl, inl, alpha=alpha_value, linewidth=1.6, color='#1F77B4')
+        ax_dnl.plot(codes_dnl, dnl, alpha=alpha_value, linewidth=1.6, color='#D62728')
+        ax_inl.plot(codes_inl, inl, alpha=alpha_value, linewidth=1.6, color='#1F77B4')
 
-    ax1.set_ylabel("DNL (LSB)", fontsize=12, fontweight='bold')
-    ax1.set_title(
-        f"Coarse-Fine Monte Carlo DNL/INL ({mc_runs} Realizations, LSB = {lsb_last:.2e})",
+    ax_dnl.set_ylabel("DNL (LSB)", fontsize=12, fontweight='bold')
+    maybe_title(ax_dnl,
+        f"Coarse-Fine Monte Carlo DNL ({mc_runs} Realizations, LSB = {lsb_last:.2e})",
         fontsize=14,
         fontweight='bold',
         pad=12,
     )
-    ax1.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
-    ax1.axhline(y=dnl_limit_lsb, color='red', linestyle='--', linewidth=1.0, alpha=0.4,
-                label=f'±{dnl_limit_lsb:.1f} LSB')
-    ax1.axhline(y=-dnl_limit_lsb, color='red', linestyle='--', linewidth=1.0, alpha=0.4)
-    ax1.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
-    ax1.set_axisbelow(True)
+    ax_dnl.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
+    ax_dnl.axhline(y=dnl_limit_lsb, color='black', linestyle='--', linewidth=1.0, alpha=0.5)
+    ax_dnl.axhline(y=-dnl_limit_lsb, color='black', linestyle='--', linewidth=1.0, alpha=0.4)
+    ax_dnl.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
+    ax_dnl.set_axisbelow(True)
+    ax_dnl.legend(fontsize=10, framealpha=0.96, edgecolor='black', loc='best')
 
-    ax2.set_ylabel("INL (LSB)", fontsize=12, fontweight='bold')
-    ax2.set_xlabel("Combined Code", fontsize=12, fontweight='bold')
-    ax2.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
-    ax2.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
-    ax2.set_axisbelow(True)
-
-    plt.tight_layout()
+    ax_inl.set_ylabel("INL (LSB)", fontsize=12, fontweight='bold')
+    ax_inl.set_xlabel("Combined Code", fontsize=12, fontweight='bold')
+    maybe_title(ax_inl,
+        f"Coarse-Fine Monte Carlo INL ({mc_runs} Realizations, LSB = {lsb_last:.2e})",
+        fontsize=14,
+        fontweight='bold',
+        pad=12,
+    )
+    ax_inl.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
+    ax_inl.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
+    ax_inl.set_axisbelow(True)
 
     if save_path:
-        fig.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f"Saved: {save_path}")
+        save_path = Path(save_path)
+        dnl_path = save_path.with_name(f"{save_path.stem}_dnl{save_path.suffix}")
+        inl_path = save_path.with_name(f"{save_path.stem}_inl{save_path.suffix}")
+        fig_dnl.tight_layout()
+        fig_inl.tight_layout()
+        fig_dnl.savefig(dnl_path, dpi=300, bbox_inches='tight')
+        fig_inl.savefig(inl_path, dpi=300, bbox_inches='tight')
+        print(f"Saved: {dnl_path}")
+        print(f"Saved: {inl_path}")
 
     coarse_sigma_c = coarse_nom.config.Ac / np.sqrt(coarse_nom.config.A) * coarse_nom.config.Cu
     fine_sigma_c = fine_nom.config.Ac / np.sqrt(fine_nom.config.A) * fine_nom.config.Cu
@@ -1193,11 +1196,17 @@ def run_mc_mismatch_analysis(
         'mean_dnl_peak_lsb': float(np.mean(dnl_peaks)),
     }
 
-    return fig, (ax1, ax2), stats
+    plt.close(fig_dnl)
+    plt.close(fig_inl)
 
-def calculate_current(td, J =0.8e-12, F = 0.05, q =1.6e-19):
+    return stats
+
+def calculate_current(shot_noise, td, J =1e-12, F = 0.05, q =1.6e-19, k = 1.38e-23, T = 100, gamma = 2/3, Vov = 200e-3, ):
         "Calculate current based on jitter requirements considering shot noise."
-        return F*q*td/J**2
+        if shot_noise:
+            return F*q*td/J**2
+        else:
+            return (4*k*T*gamma*td)/(Vov*J**2)
 
 def optimize_split_loop(
     n_total: int,
@@ -1262,7 +1271,7 @@ def optimize_split_loop(
             coarse_vth = coarse_values.get('Vth', coarse_values['Vdd'] / 2)
             coarse_values['Vth'] = coarse_vth
             k_slope_coarse = (coarse_vdd - coarse_vth) / res_coarse
-            coarse_values['Ich'] = calculate_current(5e-9)
+            coarse_values['Ich'] = calculate_current(False, 5e-9)
             coarse_values['C_ramp_cu'] = coarse_values['Ich'] / k_slope_coarse
             if coarse_values['C_ramp_cu'] < 2e-15:
                 coarse_values['C_ramp_cu'] = 2e-15 #for linearity
@@ -1274,7 +1283,7 @@ def optimize_split_loop(
             coarse_vth = coarse_values.get('Vth', coarse_values['Vdd'] / 2)
             coarse_values['Vth'] = coarse_vth
             k_slope_coarse = (coarse_vdd - coarse_vth) / res_coarse
-            coarse_values['Ich'] = calculate_current(5e-9)
+            coarse_values['Ich'] = calculate_current(False, 5e-9)
             coarse_values['Cramp_dl'] = coarse_values['Ich']/ k_slope_coarse
             if coarse_values['Cramp_dl'] < 2e-15:
                 coarse_values['Cramp_dl'] = 2e-15 #for linearity
@@ -1289,7 +1298,7 @@ def optimize_split_loop(
             res_coarse = 5e-9/coarse_codes #the coarse resolution is given by the target range divided by the target number of coarse codes
             k_slope_coarse = (coarse_vdd / (res_coarse * ((2**n_coarse) - 2)))
 
-            coarse_values['Ich'] = calculate_current(5e-9)
+            coarse_values['Ich'] = calculate_current(False,5e-9)
             C_ramp = coarse_values['Ich'] / k_slope_coarse  
             coarse_values['Cramp'] = C_ramp
 
@@ -1327,7 +1336,7 @@ def optimize_split_loop(
             fine_values['Vth'] = fine_vth
             
             k_slope_fine = (fine_vdd- fine_vth) / res_fine
-            fine_values['Ich'] = calculate_current(res_fine, J = 0.5e-12)
+            fine_values['Ich'] = calculate_current(False, res_fine, J = 0.5e-12)
             fine_values['C_ramp_cu'] = fine_values['Ich'] / k_slope_fine
 
             if fine_values['C_ramp_cu'] < 1e-15:
@@ -1344,7 +1353,7 @@ def optimize_split_loop(
             fine_values['Vth'] = fine_vth
 
             k_slope_fine = (fine_vdd - fine_vth) / res_fine
-            fine_values['Ich'] = calculate_current(res_fine, J = 0.5e-12)
+            fine_values['Ich'] = calculate_current(False, res_fine, J = 0.5e-12)
             fine_values['Cramp_dl'] = fine_values['Ich'] / k_slope_fine
 
             if fine_values['Cramp_dl'] < 1e-15:
@@ -1359,7 +1368,7 @@ def optimize_split_loop(
             res_fine = res_coarse/fine_codes #the fine resolution is given by the coarse resolution divided by the target number of fine codes
             k_slope_fine = (fine_vdd / (res_fine * ((2**n_fine) - 2)))
 
-            fine_values['Ich'] = calculate_current(res_coarse, J = 0.5e-12)
+            fine_values['Ich'] = calculate_current(False, res_coarse, J = 0.5e-12)
             C_ramp = fine_values['Ich'] / k_slope_fine
 
             if C_ramp < 1e-15:

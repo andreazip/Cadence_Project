@@ -5,7 +5,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from plot_style import apply_science_style
+from plot_style import apply_science_style, _multi_panel_figsize, maybe_suptitle, maybe_title, _multi_panel_figsize
 
 
 apply_science_style()
@@ -188,7 +188,7 @@ def combine_like_coarse_fine_dtc(
         
     lsb = np.abs(float(np.mean(np.array(local_lsb))))
 
-     #configure the first fine block
+    #configure the first fine block
     block = blocks[int(coarse_active[0])]
     previous_idx = fine_idx_last[fine_idx_last < len(block)]
     previous_values = block[previous_idx].astype(float)
@@ -217,7 +217,7 @@ def combine_like_coarse_fine_dtc(
                     else:
                         margin = local_values - p
                     
-                    candidate = np.where((margin >= 0.5 * lsb) & (margin <= 1.5 * lsb))[0]
+                    candidate = np.where((margin >= 0.6 * lsb) & (margin <= 1.4 * lsb))[0]
 
                     if len(candidate) > 0 and len(candidate_local) == 0 and candidate[0] > 3:
                             prev_value = p
@@ -430,10 +430,10 @@ def plot_selected_average_power(avg_power_w: np.ndarray, out_dir: Path, P_static
         avg_power_plot = avg_power_w - P_static
 
     codes = np.arange(len(avg_power_plot))
-    fig, ax = plt.subplots(figsize=(11, 4.8), constrained_layout=True)
+    fig, ax = plt.subplots(constrained_layout=True)
     ax.plot(codes, avg_power_plot * 1e6, linewidth=1.8, color="#1F77B4")
     ax.legend([P_static], title="Estimated static power", loc="upper left")
-    ax.set_title("Average Power per 20 ns Execution (Linearized Coarse-Fine Codes)")
+    maybe_title(ax, "Average Power per 20 ns Execution (Linearized Coarse-Fine Codes)")
     ax.set_xlabel("Linearized combined code")
     ax.set_ylabel("Average power [uW]")
     ax.grid(True, alpha=0.35)
@@ -482,10 +482,10 @@ def plot_results(delay: np.ndarray, coarse_marker: np.ndarray, dnl: np.ndarray, 
     """Save delay characteristic and DNL/INL plots."""
     x = np.arange(len(delay))
 
-    fig1, ax1 = plt.subplots(figsize=(11, 4.5), constrained_layout=True)
+    fig1, ax1 = plt.subplots(constrained_layout=True)
     ax1.plot(x, delay, linewidth=1.6, label="Delay")
     ax1.plot(x[coarse_marker], delay[coarse_marker], "o", markersize=4, label="Coarse transition")
-    ax1.set_title("Delay Characteristic (Processed Like coarse_fine_dtc)")
+    maybe_suptitle(ax1, "Delay Characteristic (Processed Like coarse_fine_dtc)")
     ax1.set_xlabel("Combined code")
     ax1.set_ylabel("Delay [s]")
     ax1.grid(True, alpha=0.3)
@@ -494,17 +494,17 @@ def plot_results(delay: np.ndarray, coarse_marker: np.ndarray, dnl: np.ndarray, 
     fig1.savefig(p1, dpi=300)
     plt.close(fig1)
 
-    fig2, (ax2, ax3) = plt.subplots(2, 1, figsize=(11, 8), constrained_layout=True)
+    fig2, (ax2, ax3) = plt.subplots(2, 1, figsize=_multi_panel_figsize(2, 1), constrained_layout=True)
     ax2.plot(x, dnl, linewidth=1.4)
     ax2.axhline(0.0, linestyle="--", linewidth=1.0)
-    ax2.set_title("DNL (Processed Like coarse_fine_dtc)")
+    maybe_suptitle(ax2, "DNL (Processed Like coarse_fine_dtc)")
     ax2.set_xlabel("Combined code")
     ax2.set_ylabel("DNL [LSB]")
     ax2.grid(True, alpha=0.3)
 
     ax3.plot(x, inl, linewidth=1.4)
     ax3.axhline(0.0, linestyle="--", linewidth=1.0)
-    ax3.set_title("INL (Processed Like coarse_fine_dtc)")
+    maybe_suptitle(ax3, "INL (Processed Like coarse_fine_dtc)")
     ax3.set_xlabel("Combined code")
     ax3.set_ylabel("INL [LSB]")
     ax3.grid(True, alpha=0.3)
@@ -518,18 +518,18 @@ def plot_results(delay: np.ndarray, coarse_marker: np.ndarray, dnl: np.ndarray, 
 
 def main():
     parser = argparse.ArgumentParser(description="Process CSV exactly like coarse_fine_dtc indexing/policy.")
-    parser.add_argument("--csv", default="results_cadence/delay_coarse_fine_13bits.csv")
+    parser.add_argument("--csv", default="results_cadence/coarse_fine_dtc_delay.csv")
     parser.add_argument(
         "--power-csvs",
         nargs="+",
-        default=["results_cadence/power_coarse_fine/power_coarse_fine_13bits_1.csv"],
-        #   "results_cadence/power_coarse_fine/power_coarse_fine_13bits_2.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_3.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_4.csv",    "results_cadence/power_coarse_fine/power_coarse_fine_13bits_5.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_6.csv" , "results_cadence/power_coarse_fine/power_coarse_fine_13bits_7.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_8.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_9.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_10.csv"],
+        default=["results_cadence/power_coarse_fine/power_coarse_fine_13bits_1.csv",
+        "results_cadence/power_coarse_fine/power_coarse_fine_13bits_2.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_3.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_4.csv",    "results_cadence/power_coarse_fine/power_coarse_fine_13bits_5.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_6.csv" , "results_cadence/power_coarse_fine/power_coarse_fine_13bits_7.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_8.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_9.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_10.csv"],
         help="Ordered power transient CSVs; traces are processed sequentially in this order.",
     )
     parser.add_argument("--out-dir", default=str(SAVE_DIR))
     parser.add_argument("--coarse-codes", type=int, default=32)
     parser.add_argument("--fine-codes", type=int, default=64)
-    parser.add_argument("--period-s", type=float, default=20e-9)
+    parser.add_argument("--period-s" , type=float, default=20e-9)
     parser.add_argument("--power-start-time", type=float, default=None)
     parser.add_argument(
         "--max-boundary-skip",

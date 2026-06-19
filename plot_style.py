@@ -53,12 +53,12 @@ def with_science_style(func):
     return wrapper
 
 
-def _maybe_title(target, text, **kwargs):
+def maybe_title(target, text, **kwargs):
     if SHOW_FIGURE_TITLES and _has_multiple_plot_axes(target.figure):
         target.set_title(text, **kwargs)
 
 
-def _maybe_suptitle(fig, text, **kwargs):
+def maybe_suptitle(fig, text, **kwargs):
     if SHOW_FIGURE_TITLES and _has_multiple_plot_axes(fig):
         fig.suptitle(text, **kwargs)
 

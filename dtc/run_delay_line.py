@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from dtc.dtc_core import DelayLineDTC, compute_dnl_inl, save_figure_to
-from plot_style import apply_science_style
+from plot_style import apply_science_style, _multi_panel_figsize
 
 
 CONFIG = {
@@ -30,7 +30,7 @@ CONFIG = {
 
 
 def plot_delay_line(replica_axis, delay_s, power_w, out_dir):
-    fig_delay, ax_delay = plt.subplots(figsize=(10, 6))
+    fig_delay, ax_delay = plt.subplots()
     ax_delay.plot(replica_axis, delay_s * 1e9, color="#D62728", linewidth=2.6, label="Delay")
     ax_delay.set_title("Delay Line Delay vs Output Tap", fontsize=14, fontweight="bold", pad=12)
     ax_delay.set_xlabel("Output Tap Index", fontsize=12, fontweight="bold")
@@ -41,7 +41,7 @@ def plot_delay_line(replica_axis, delay_s, power_w, out_dir):
     save_figure_to(fig_delay, "delay_line_delay_vs_replicas.png", out_dir)
     plt.close(fig_delay)
 
-    fig_power, ax_power = plt.subplots(figsize=(10, 6))
+    fig_power, ax_power = plt.subplots()
     ax_power.plot(replica_axis, power_w * 1e6, color="#1F77B4", linewidth=2.6, label="Power")
     ax_power.set_title("Delay Line Power vs Output Tap", fontsize=14, fontweight="bold", pad=12)
     ax_power.set_xlabel("Output Tap Index", fontsize=12, fontweight="bold")
@@ -60,7 +60,7 @@ def plot_delay_line_dnl_inl(replica_axis, delay_s, out_dir):
 
     x = replica_axis[1:]
 
-    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(12, 10))
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=_multi_panel_figsize(2, 1))
 
     ax1.plot(x, dnl, color="#D62728", linewidth=2.2, label="DNL")
     ax1.axhline(y=0, color="black", linestyle="-", linewidth=1.0, alpha=0.5)

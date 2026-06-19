@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
 
-from plot_style import apply_science_style
+from plot_style import apply_science_style, _multi_panel_figsize
 
 
 apply_science_style()
@@ -221,7 +221,7 @@ results = power_method(VDD, K_slope, C_load, k_lim, Cu0, res, NBITS)
 best_n = min(results.keys(), key=lambda n: results[n]['p_corner'])
 best_data = results[best_n]
 
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=_multi_panel_figsize(1, 2))
 
 # Plot 1: Original All-Bits Plot
 t_corners = []
@@ -275,7 +275,7 @@ results_bitext = power_method_bitextension(VDD, K_slope, C_load, k_lim, Cu0, res
 best_n_bitext = min(results_bitext.keys(), key=lambda n: results_bitext[n]['p_corner'])
 best_data_bitext = results_bitext[best_n_bitext]
 
-fig_bitext, (ax1_be, ax2_be) = plt.subplots(1, 2, figsize=(14, 6))
+fig_bitext, (ax1_be, ax2_be) = plt.subplots(1, 2, figsize=_multi_panel_figsize(1, 2))
 
 # Plot 1: All-bits plot (bit extension)
 t_corners_be = []
@@ -357,7 +357,7 @@ results_bext_opt = power_method_bitextension(VDD, K_slope_bext, C_load, k_lim, C
 best_n_bext_opt = min(results_bext_opt.keys(), key=lambda n: results_bext_opt[n]['p_corner'])
 best_data_bext_opt = results_bext_opt[best_n_bext_opt]
 
-fig_bext_opt, (ax1_bext_opt, ax2_bext_opt) = plt.subplots(1, 2, figsize=(14, 6))
+fig_bext_opt, (ax1_bext_opt, ax2_bext_opt) = plt.subplots(1, 2, figsize=_multi_panel_figsize(1, 2))
 
 # Plot 1: All-bits plot (bit extension optimized)
 t_corners_bext_opt = []
@@ -406,7 +406,7 @@ print(f"Bit Extension Min Power at Corner: {best_data_bext_opt['p_corner']*1e6:.
 print(f"Bit Extension Optimal T_DTC: {best_data_bext_opt['t_corner']*1e9:.3f} ns")
 
 # --- FRONTIER CURVE FOR BIT EXTENSION ---
-fig_bext_frontier, ax_bext_frontier = plt.subplots(figsize=(10, 7))
+fig_bext_frontier, ax_bext_frontier = plt.subplots()
 
 colors_bext = ['#1F77B4', '#FF7F0E', '#2CA02C', '#D62728', '#9467BD']
 
@@ -450,7 +450,7 @@ fig_bext_frontier.savefig(save_path_bext_frontier, dpi=300, bbox_inches='tight')
 print(f"\nSaved: {save_path_bext_frontier}")
 
 # --- OPTIMAL DESIGN FRONTIER FOR BIT EXTENSION ---
-fig_bext_opt_frontier, ax_bext_opt_frontier = plt.subplots(figsize=(10, 7))
+fig_bext_opt_frontier, ax_bext_opt_frontier = plt.subplots()
 
 t_mins_bext = [m['t_ns'] for m in min_points_bext]
 p_mins_bext = [m['p_uw'] for m in min_points_bext]
@@ -491,7 +491,7 @@ print(f"Saved: {save_path_bext_opt_frontier}")
 
 # Scenarios to sweep (You can change K_slope or k_lim here)
 
-fig2, ax = plt.subplots(figsize=(10, 7))
+fig2, ax = plt.subplots()
 
 colors = ['#1F77B4', '#FF7F0E', '#2CA02C', '#D62728', '#9467BD']
 
@@ -533,7 +533,7 @@ fig2.savefig(save_path2, dpi=300, bbox_inches='tight')
 print(f"\nSaved: {save_path2}")
 
 # --- PLOTTING ---
-fig3, ax = plt.subplots(figsize=(10, 7))
+fig3, ax = plt.subplots()
 
 t_mins = [m['t_ns'] for m in min_points]
 p_mins = [m['p_uw'] for m in min_points]
@@ -637,7 +637,7 @@ print(f"  P_total = {best_corner_global_bext['p_uw']:.3f} µW")
 # ============================================================
 # COMPARISON PLOT: Regular vs Bit Extension
 # ============================================================
-fig_comparison, ax_comp = plt.subplots(figsize=(12, 7))
+fig_comparison, ax_comp = plt.subplots()
 
 # Plot regular mode optimal points
 t_mins_regular = [m['t_ns'] for m in min_points]

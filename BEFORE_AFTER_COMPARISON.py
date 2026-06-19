@@ -50,9 +50,8 @@ AFTER: Clean, DRY, Professional Code
 
 # Linearity plotting (Refactored)
 def plot_linearity(self, filename, signal_name=None):
-    ...
-    fig, (ax1, ax2) = self._create_figure(nrows=2, ncols=1, figsize=(11, 9), 
-                                          sharex=True)
+  ...
+  fig, (ax1, ax2) = self._create_figure(nrows=2, ncols=1, sharex=True)
     
     # Plot 1: DNL (with professional styling)
     ax1.plot(plot_df['label'], dnl, marker='o', color=self.colors['secondary'], 
@@ -112,9 +111,9 @@ NEW HELPER METHODS
    Replaces:  plt.savefig() + plt.close() + manual dpi setting
    Saves:     10+ lines per file
 
-2. _create_figure(nrows=1, ncols=1, figsize=None, sharex=False, sharey=False)
-   Usage:     fig, ax = self._create_figure(figsize=(11, 6))
-   Replaces:  plt.subplots() with manual figsize logic
+2. _create_figure(nrows=1, ncols=1, sharex=False, sharey=False)
+  Usage:     fig, ax = self._create_figure()
+  Replaces:  plt.subplots() with manual figsize logic
    Saves:     5+ lines per file
 
 3. _apply_grid_styling(ax, alpha=0.3)
