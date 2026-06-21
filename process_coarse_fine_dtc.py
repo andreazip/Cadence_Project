@@ -496,7 +496,8 @@ def plot_results(delay: np.ndarray, coarse_marker: np.ndarray, dnl: np.ndarray, 
 
     fig2, (ax2, ax3) = plt.subplots(2, 1, figsize=_multi_panel_figsize(2, 1), constrained_layout=True)
     ax2.plot(x, dnl, linewidth=1.4)
-    ax2.axhline(0.0, linestyle="--", linewidth=1.0)
+    ax2.axhline(0.5, linestyle="--", linewidth=1.0)
+    ax2.axhline(-0.5, linestyle="--", linewidth=1.0)
     maybe_suptitle(ax2, "DNL (Processed Like coarse_fine_dtc)")
     ax2.set_xlabel("Combined code")
     ax2.set_ylabel("DNL [LSB]")
@@ -518,17 +519,18 @@ def plot_results(delay: np.ndarray, coarse_marker: np.ndarray, dnl: np.ndarray, 
 
 def main():
     parser = argparse.ArgumentParser(description="Process CSV exactly like coarse_fine_dtc indexing/policy.")
-    parser.add_argument("--csv", default="results_cadence/coarse_fine_dtc_delay.csv")
+    parser.add_argument("--csv", default="results_cadence/delay_coarse_fine.csv")
     parser.add_argument(
         "--power-csvs",
         nargs="+",
-        default=["results_cadence/power_coarse_fine/power_coarse_fine_13bits_1.csv",
-        "results_cadence/power_coarse_fine/power_coarse_fine_13bits_2.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_3.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_4.csv",    "results_cadence/power_coarse_fine/power_coarse_fine_13bits_5.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_6.csv" , "results_cadence/power_coarse_fine/power_coarse_fine_13bits_7.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_8.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_9.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_10.csv"],
+        default = [],
+        # default=["results_cadence/power_coarse_fine/power_coarse_fine_13bits_1.csv",
+        # "results_cadence/power_coarse_fine/power_coarse_fine_13bits_2.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_3.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_4.csv",    "results_cadence/power_coarse_fine/power_coarse_fine_13bits_5.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_6.csv" , "results_cadence/power_coarse_fine/power_coarse_fine_13bits_7.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_8.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_9.csv", "results_cadence/power_coarse_fine/power_coarse_fine_13bits_10.csv"],
         help="Ordered power transient CSVs; traces are processed sequentially in this order.",
     )
     parser.add_argument("--out-dir", default=str(SAVE_DIR))
-    parser.add_argument("--coarse-codes", type=int, default=32)
-    parser.add_argument("--fine-codes", type=int, default=64)
+    parser.add_argument("--coarse-codes", type=int, default= 128)
+    parser.add_argument("--fine-codes", type=int, default=31)
     parser.add_argument("--period-s" , type=float, default=20e-9)
     parser.add_argument("--power-start-time", type=float, default=None)
     parser.add_argument(

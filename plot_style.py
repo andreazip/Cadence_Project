@@ -12,13 +12,13 @@ SCIENCE_STYLE = ["science", "std-colors", "no-latex"]
 SCIENCE_STYLE_OVERRIDES = {
     "text.usetex": True,
     "figure.figsize": (3.3, 2.5),
-    "font.size": 8,
-    "axes.labelsize": 10,
-    "axes.titlesize": 9,
-    "xtick.labelsize": 8,
-    "ytick.labelsize": 8,
-    "legend.fontsize": 6,
-    "legend.title_fontsize": 8,
+    "font.size": 15,
+    "axes.labelsize": 15,
+    "axes.titlesize": 15,
+    "xtick.labelsize": 12,
+    "ytick.labelsize": 12,
+    "legend.fontsize": 15,
+    "legend.title_fontsize": 15,
 }
 SHOW_FIGURE_TITLES = False
 
