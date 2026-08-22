@@ -10,6 +10,7 @@ import csv
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from adjustText import adjust_text
 import numpy as np
 
 from plot_style import apply_science_style
@@ -112,17 +113,23 @@ def _plot_optimization_metric_vs_vdd(
     save_path: str,
     exclude_delay_lines: bool = False,
 ) -> None:
-    """Plot one optimization metric versus Vdd for all mode configurations."""
-    fig, ax = plt.subplots()
+    """Plot one optimization metric versus Vdd for all mode configurations with shared custom legend."""
+    
+    # 1. Initialize the single plot canvas using your standard aspect ratios
+    base_w, base_h = plt.rcParams.get("figure.figsize", (3.3, 2.5))
+    fig, ax = plt.subplots(figsize=(base_w * 1.5, base_h * 1.5))
 
-    colors = [
-        '#1F77B4', '#D62728', '#2CA02C', '#FF7F0E', '#8C564B',
-        '#17BECF', '#E377C2', '#7F7F7F', '#BCBD22',
-    ]
+    # 2. Extract configuration metadata and set uniform categorical color maps
+    mode_labels = [cfg_label for (cfg_label, _, _) in mode_configs]
+    if exclude_delay_lines:
+        mode_labels = [l for l in mode_labels if "DL" not in str(l).upper()]
 
-    for idx, (cfg_label, _, _) in enumerate(mode_configs):
-        if exclude_delay_lines and "DL" in str(cfg_label).upper():
-            continue
+    palette = [plt.cm.tab10(i) for i in range(10)]
+    color_map = {label: palette[i % len(palette)] for i, label in enumerate(mode_labels)}
+
+    # 3. Filter and parse valid plot lines sequentially
+    plot_subset = []
+    for cfg_label in mode_labels:
         cfg_rows = [
             r for r in records
             if r["configuration"] == cfg_label and float(r["vdd"]) in [float(v) for v in vdd_values]
@@ -131,50 +138,123 @@ def _plot_optimization_metric_vs_vdd(
         if len(cfg_rows) == 0:
             continue
 
+        # Append rows to our cumulative list to hand off for cluster grouping annotations later
+        plot_subset.extend(cfg_rows)
+
         x_vdd = [float(r["vdd"]) for r in cfg_rows]
         y_metric = [float(r[metric_key]) * 1e6 for r in cfg_rows]
-
-        label = f"{cfg_label}"
 
         ax.plot(
             x_vdd,
             y_metric,
             marker='o',
             markersize=7,
-            linewidth=2.4,
-            color=colors[idx % len(colors)],
-            label=label,
+            linewidth=2,
+            color=color_map[cfg_label],
+            label=cfg_label,
         )
 
-    maybe_title(ax, title,fontweight='bold', pad=12)
-    ax.set_xlabel('Vdd [V]',  fontweight='bold')
-    ax.set_ylabel(ylabel,  fontweight='bold')
-    ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
+    # 4. FIX: Invoke vertical column clustering outside the loop passing the full data collection
+    if plot_subset:
+        _annotate_bits(ax, plot_subset, metric_key, color_map)
+
+    # 5. Core plot typography, styling frames, and mathematical axis scaling
+    maybe_title(ax, title, fontweight='bold', pad=12)
+    ax.set_xlabel(r'$\mathrm{V_\mathrm{DD}}$ $\mathrm{[V]}$', fontsize=20, fontweight='bold')
+    ax.set_ylabel(ylabel, fontsize=20, fontweight='bold')
+    ax.tick_params(axis='x', labelsize=16)
+    ax.tick_params(axis='y', labelsize=16)
+    ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.0, color="#b7b7b7")
     ax.set_axisbelow(True)
-    ax.legend(bbox_to_anchor=(1.05, 1) ,fontsize=9, framealpha=0.96, edgecolor='black', loc='best')
-    plt.tight_layout()
+
+    # 6. Extract legend handles dynamically and format the identical frame structure 
+    handles, labels = ax.get_legend_handles_labels()
+    
+    # Compress internal margins to create a dedicated empty space on the right for the floating box
+    fig.subplots_adjust(left=0.12, right=0.75, top=0.88, bottom=0.16)
+    
+    fig.legend(
+        handles,
+        labels,
+        loc='center left',
+        bbox_to_anchor=(0.78, 0.5), # Anchor positioned cleanly outside the right frame boundary
+        framealpha=0.96,
+        edgecolor='black',
+        title=rf"$\mathrm{{Mode}}$",
+    )
+
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"Saved: {save_path}")
     plt.close(fig)
 
-
 def _annotate_bits(ax, records: list, metric_key: str, color_map: dict) -> None:
-    """Annotate each point with the coarse+fine bit split."""
+    """
+    Groups configurations by VDD and sorts them dynamically by y-value.
+    
+    If analyzing the delay line panel (detected via its size/subset characteristics),
+    it spreads annotations tightly above and below the points using a 2-element split.
+    Otherwise, it applies the compact 5-point centered stack layout.
+    """
+    from collections import defaultdict
+    
+    # 1. Group ALL records by their precise VDD voltage column
+    vdd_clusters = defaultdict(list)
     for record in records:
-        x_vdd = float(record["vdd"])
-        y_metric = float(record[metric_key]) * 1e6
-        bit_text = f"{int(record['n_coarse'])}+{int(record['n_fine'])}"
-        ax.annotate(
-            bit_text,
-            (x_vdd, y_metric),
-            textcoords="offset points",
-            xytext=(0, 8),
-            ha='center',
-            fontsize=7,
-            fontweight='bold',
-            color=color_map.get(record["configuration"], 'black'),
-            bbox=dict(boxstyle='round,pad=0.15', facecolor='white', edgecolor='none', alpha=0.75),
-        )
+        x_vdd = round(float(record["vdd"]), 3)
+        vdd_clusters[x_vdd].append(record)
+        
+    # 2. Process each vertical VDD column independently
+    for x_vdd, cluster in vdd_clusters.items():
+        
+        # 3. Sort the entire vertical column cluster by its plotted Y-value
+        sorted_cluster = sorted(cluster, key=lambda r: float(r[metric_key]))
+        cluster_size = len(sorted_cluster)
+        
+        # 4. Apply conditional stacking geometry based on data density
+        for stack_index, record in enumerate(sorted_cluster):
+            y_metric = float(record[metric_key]) * 1e6
+            bit_text = f"{int(record['n_coarse'])}+{int(record['n_fine'])}"
+            
+            # --- CUSTOM GEOMETRY FOR DELAY LINES (Usually 2 elements in the subset) ---
+            if stack_index >= 4:
+                # stack_index = 0 -> -1 -> -11 (tightly below the marker)
+                # stack_index = 1 ->  1 ->  11 (tightly above the marker)
+                centered_index = -1 if stack_index == 5 else 1
+                box_spacing = 11
+                y_offset = centered_index * box_spacing
+                
+            # --- STANDARD CENTERING MATRIX FOR MULTI-CURVE CLUSTERS (5 elements) ---
+            else:
+                # Maps index directly to a balanced centered tower array [-22, -11, 0, 11, 22]
+                centered_index = stack_index - 2
+                box_spacing = 11  # Kept small to bring bounding boxes close together
+                y_offset = centered_index * box_spacing
+            
+            ax.annotate(
+                bit_text,
+                xy=(float(record["vdd"]), y_metric),
+                textcoords="offset points",
+                xytext=(0, y_offset),  # Perfect vertical line projection alignment
+                ha='center',
+                va='center',
+                fontsize=11,
+                fontweight='bold',
+                color=color_map.get(record["configuration"], 'black'),
+                bbox=dict(
+                    boxstyle='round,pad=0.15', # Tight interior text box padding
+                    facecolor='white', 
+                    edgecolor='black', 
+                    alpha=0.75,                 # Solid backdrop prevents grid overlap
+                    lw=0.8
+                ),
+                arrowprops=dict(
+                    arrowstyle="->", 
+                    color="gray", 
+                    lw=0.6, 
+                    alpha=0.4,
+                    shrinkA=1
+                )
+            )
 
 
 def _plot_shared_legend_three_panel(
@@ -202,15 +282,14 @@ def _plot_shared_legend_three_panel(
 
     mode_labels = sorted({r["configuration"] for r in plot_records if r.get("configuration")})
     palette = [
-        '#1F77B4', '#D62728', '#2CA02C', '#FF7F0E', '#8C564B',
-        '#17BECF', '#E377C2', '#7F7F7F', '#BCBD22',
+       plt.cm.tab10(i) for i in range(10)
     ]
     color_map = {label: palette[i % len(palette)] for i, label in enumerate(mode_labels)}
     vdd_values = sorted({float(r["vdd"]) for r in plot_records})
 
     base_w, base_h = plt.rcParams.get("figure.figsize", (3.3, 2.5))
     fig = plt.figure(figsize=(base_w * 3.7, base_h * 1.9))
-    gs = fig.add_gridspec(1, 3, wspace=0.32)
+    gs = fig.add_gridspec(1, 3, wspace=0.4)
     ax_pmax_dl = fig.add_subplot(gs[0, 0])
     ax_pmax_no = fig.add_subplot(gs[0, 1])
     ax_pavg_no = fig.add_subplot(gs[0, 2])
@@ -223,6 +302,7 @@ def _plot_shared_legend_three_panel(
         labels.append(mode_label)
 
     def plot_panel(ax, metric_key: str, ylabel: str, panel_title: str, record_subset: list, annotate: bool = True) -> None:
+        # 1. Plot the lines for each configuration independently
         for mode_label in mode_labels:
             cfg_rows = [r for r in record_subset if r["configuration"] == mode_label]
             cfg_rows = sorted(cfg_rows, key=lambda r: float(r["vdd"]))
@@ -235,24 +315,29 @@ def _plot_shared_legend_three_panel(
                 y_metric,
                 marker='o',
                 markersize=7,
-                linewidth=2.4,
+                linewidth=2,
                 color=color_map[mode_label],
-                label=mode_label,
+                label=rf"$\mathrm{{{mode_label}}}$",
             )
-            if annotate:
-                _annotate_bits(ax, cfg_rows, metric_key, color_map)
+
+        # 2. CRITICAL FIX: Move the annotation block OUTSIDE the loop!
+        # This passes the cumulative subset so Biber/Matplotlib groups them correctly.
+        if annotate and record_subset:
+            _annotate_bits(ax, record_subset, metric_key, color_map)
 
         maybe_title(ax, panel_title, fontweight='bold', pad=12)
-        ax.set_xlabel('Vdd [V]', fontweight='bold')
-        ax.set_ylabel(ylabel, fontweight='bold')
+        ax.set_xlabel(r'$\mathrm{V_\mathrm{DD}}$ $\mathrm{[V]}$', fontsize=20, fontweight='bold')
+        ax.set_ylabel(ylabel, fontsize=20, fontweight='bold')
+        ax.tick_params(axis='x', labelsize=16)
+        ax.tick_params(axis='y', labelsize=16)
         ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.0, color="#b7b7b7")
         ax.set_axisbelow(True)
 
     plot_panel(
         ax_pmax_dl,
         metric_key="max_total_power_w",
-        ylabel=r"$P_{max}$ [$\mu W$]",
-        panel_title=f"P_{max} with delay lines{title_suffix}",
+        ylabel=r"$P_\mathrm{max}$ [$\mu W$]",
+        panel_title=f"P_\mathrm{{max}} with delay lines{title_suffix}",
         record_subset=plot_records,
         annotate=True,
     )
@@ -261,16 +346,16 @@ def _plot_shared_legend_three_panel(
     plot_panel(
         ax_pmax_no,
         metric_key="max_total_power_w",
-        ylabel=r"$P_{max}$ [$\mu W$]",
-        panel_title=f"P_max without delay lines{title_suffix}",
+        ylabel=r"$P_\mathrm{max}$ [$\mu W$]",
+        panel_title=f"P_\mathrm{{max}} without delay lines{title_suffix}",
         record_subset=no_dl_records,
         annotate=True,
     )
     plot_panel(
         ax_pavg_no,
         metric_key="avg_total_power_w",
-        ylabel=r"$P_{avg}$ [$\mu W$]",
-        panel_title=f"P_avg without delay lines{title_suffix}",
+        ylabel=r"$P_{\mathrm{avg}}$ [$\mu W$]",
+        panel_title=f"P_\mathrm{{avg}} without delay lines{title_suffix}",
         record_subset=no_dl_records,
         annotate=True,
     )
@@ -283,8 +368,7 @@ def _plot_shared_legend_three_panel(
         bbox_to_anchor=(0.82, 0.5),
         framealpha=0.96,
         edgecolor='black',
-        fontsize=9,
-        title='Mode',
+        title=rf"$\mathrm{{Mode}}$",
     )
     fig.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"Saved: {save_path}")
@@ -372,13 +456,13 @@ def _plot_annotated_metric(
             textcoords="offset points",
             xytext=(0, 7),
             ha='center',
-            fontsize=6,
+            fontsize=12,
             fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.15', facecolor='white', edgecolor='none', alpha=0.75),
         )
 
     maybe_title(ax, title, fontweight='bold', pad=12)
-    ax.set_xlabel('Vdd [V]', fontweight='bold')
+    ax.set_xlabel(r'$\mathrm{V_\mathrm{DD}}$ $\mathrm{[V]}$', fontweight='bold')
     ax.set_ylabel(ylabel, fontweight='bold')
     ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax.set_axisbelow(True)
@@ -397,50 +481,50 @@ def plot_optimization_metrics_from_csv(csv_path: Path, save_dir: Path) -> None:
     mode_configs = [(label, None, None) for label in mode_labels]
     vdd_values = sorted({float(r["vdd"]) for r in records})
 
-    pmax_plot_path = save_dir / "coarse_fine_opt_pmax_vs_vdd.csv_only.png"
+    pmax_plot_path = save_dir / "coarse_fine_opt_pmax_vs_vdd.csv_only.pdf"
     _plot_optimization_metric_vs_vdd(
         records=records,
         mode_configs=mode_configs,
         vdd_values=vdd_values,
         metric_key="max_total_power_w",
-        ylabel=r" $P_{{max}} [\mu W]$",
-        title="Best Split P_max vs Vdd by Configuration",
+        ylabel=rf" $P_\mathrm{{max}}$ $[\mathrm{{\mu W}}]$",
+        title=rf"Best Split P_\mathrm{{max}}$ vs Vdd by Configuration",
         save_path=str(pmax_plot_path),
     )
 
     records_no_dl = [r for r in records if not _has_delay_line_mode(r)]
     if records_no_dl:
-        pmax_plot_path_no_dl = save_dir / "coarse_fine_opt_pmax_vs_vdd.csv_only_no_dl.png"
+        pmax_plot_path_no_dl = save_dir / "coarse_fine_opt_pmax_vs_vdd.csv_only_no_dl.pdf"
         _plot_optimization_metric_vs_vdd(
             records=records_no_dl,
             mode_configs=[(label, None, None) for label in sorted({r["configuration"] for r in records_no_dl if r.get("configuration")})],
             vdd_values=sorted({float(r["vdd"]) for r in records_no_dl}),
             metric_key="max_total_power_w",
-            ylabel=r"$P_{{max}} [\mu W]$",
+            ylabel=r"$P_\mathrm{max}$ $[\mathrm{\mu W}]$",
             title="Best Split P_max vs Vdd by Configuration (No Delay Lines)",
             save_path=str(pmax_plot_path_no_dl),
             exclude_delay_lines=True,
         )
 
-    pavg_plot_path = save_dir / "coarse_fine_opt_pavg_vs_vdd.csv_only.png"
+    pavg_plot_path = save_dir / "coarse_fine_opt_pavg_vs_vdd.csv_only.pdf"
     _plot_optimization_metric_vs_vdd(
         records=records,
         mode_configs=mode_configs,
         vdd_values=vdd_values,
         metric_key="avg_total_power_w",
-        ylabel=r" $P_{{avg}} [\mu W]$",
+        ylabel=r" $P_\mathrm{avg}$ $[\mathrm{\mu W}]$",
         title="Best Split P_avg vs Vdd by Configuration",
         save_path=str(pavg_plot_path),
     )
 
     if records_no_dl:
-        pavg_plot_path_no_dl = save_dir / "coarse_fine_opt_pavg_vs_vdd.csv_only_no_dl.png"
+        pavg_plot_path_no_dl = save_dir / "coarse_fine_opt_pavg_vs_vdd.csv_only_no_dl.pdf"
         _plot_optimization_metric_vs_vdd(
             records=records_no_dl,
             mode_configs=[(label, None, None) for label in sorted({r["configuration"] for r in records_no_dl if r.get("configuration")})],
             vdd_values=sorted({float(r["vdd"]) for r in records_no_dl}),
             metric_key="avg_total_power_w",
-            ylabel=r" $P_{{avg}} [\mu W]$",
+            ylabel=r" $P_\mathrm{avg}$ $[\mathrm{\mu W}]$",
             title="Best Split P_avg vs Vdd by Configuration (No Delay Lines)",
             save_path=str(pavg_plot_path_no_dl),
             exclude_delay_lines=True,
@@ -452,7 +536,7 @@ def plot_optimization_metrics_from_csv(csv_path: Path, save_dir: Path) -> None:
         fig, axes = plt.subplots(1, 3, figsize=(15.5, 4.6), sharex=True)
 
         unique_labels = sorted({_mode_label(r) for r in records})
-        color_cycle = ['#1F77B4', '#D62728', '#2CA02C', '#FF7F0E', '#8C564B', '#17BECF', '#E377C2']
+        color_cycle = [plt.cm.tab10(i) for i in range(plt.cm.tab10.N)]
         color_map = {label: color_cycle[i % len(color_cycle)] for i, label in enumerate(unique_labels)}
 
         # Build a single legend from the label/color map.
@@ -463,30 +547,30 @@ def plot_optimization_metrics_from_csv(csv_path: Path, save_dir: Path) -> None:
             legend_handles.append(handle)
             legend_labels.append(label)
 
-        _plot_annotated_metric(
-            axes[0],
-            records,
-            metric_key="max_total_power_w",
-            title="P_max with delay lines",
-            ylabel=r"$P_{max} [\mu W]$",
-            color_map=color_map,
-        )
-        _plot_annotated_metric(
-            axes[1],
-            records_no_dl_by_mode,
-            metric_key="max_total_power_w",
-            title=r"P_{max} without delay lines",
-            ylabel=r"$P_{max} [\mu W]$",
-            color_map=color_map,
-        )
-        _plot_annotated_metric(
-            axes[2],
-            records_no_dl_by_mode,
-            metric_key="avg_total_power_w",
-            title=r"P_{avg} without delay lines",
-            ylabel=r"$P_{avg} [\mu W]$",
-            color_map=color_map,
-        )
+        # _plot_annotated_metric(
+        #     axes[0],
+        #     records,
+        #     metric_key="max_total_power_w",
+        #     title="P_max with delay lines",
+        #     ylabel=r"$P_\mathrm{max}$ $[\mathrm{\mu W}]$",
+        #     color_map=color_map,
+        # )
+        # _plot_annotated_metric(
+        #     axes[1],
+        #     records_no_dl_by_mode,
+        #     metric_key="max_total_power_w",
+        #     title=r"P_\mathrm{max} without delay lines",
+        #     ylabel=r"$P_\mathrm{max}$ $[\mathrm{\mu W}]$",
+        #     color_map=color_map,
+        # )
+        # _plot_annotated_metric(
+        #     axes[2],
+        #     records_no_dl_by_mode,
+        #     metric_key="avg_total_power_w",
+        #     title=r"P_\mathrm{avg} without delay lines",
+        #     ylabel=r"$P_\mathrm{avg}$ $[\mathrm{\mu W}]$",
+        #     color_map=color_map,
+        # )
 
         for ax in axes:
             ax.set_xlim(min(vdd_values) - 0.03, max(vdd_values) + 0.03)
@@ -501,13 +585,13 @@ def plot_optimization_metrics_from_csv(csv_path: Path, save_dir: Path) -> None:
             edgecolor='black',
             title='Mode',
         )
-        combined_path = save_dir / "coarse_fine_opt_combined_three_panel.csv_only.png"
+        combined_path = save_dir / "coarse_fine_opt_combined_three_panel.csv_only.pdf"
         plt.tight_layout(rect=(0.14, 0.0, 1.0, 1.0))
         fig.savefig(combined_path, dpi=300, bbox_inches='tight')
         print(f"Saved: {combined_path}")
         plt.close(fig)
 
-    combined_three_panel = save_dir / "coarse_fine_opt_three_panel_csv_only.png"
+    combined_three_panel = save_dir / "coarse_fine_opt_three_panel_csv_only.pdf"
     _plot_shared_legend_three_panel(
         records=records,
         title="Best Split Power Summary vs Vdd",
@@ -515,7 +599,7 @@ def plot_optimization_metrics_from_csv(csv_path: Path, save_dir: Path) -> None:
         include_delay_lines=True,
     )
 
-    combined_three_panel_no_dl = save_dir / "coarse_fine_opt_three_panel_csv_only_no_dl.png"
+    combined_three_panel_no_dl = save_dir / "coarse_fine_opt_three_panel_csv_only_no_dl.pdf"
     _plot_shared_legend_three_panel(
         records=records_no_dl if records_no_dl else records,
         title="Best Split Power Summary vs Vdd",
@@ -572,14 +656,14 @@ def main() -> None:
     max_delay_ns = float(CONFIG["max_delay_ns"])
     ch = architecture.combined_characteristic(coarse_period_s=max_delay_ns*1e-9, coarse_codes=coarse_idx, fine_idx_per_coarse=fine_idx_per_coarse, policy_meta=policy_meta)
     
-    architecture.plot_characteristic_vs_code(t_range_ns=max_delay_ns, save_path=out_path('coarse_fine_delay_vs_code.png'), ch=ch, policy_meta=policy_meta)
-    architecture.plot_power_vs_code(avg_over_target_range_ns=max_delay_ns, avg_num_points=200, save_path=out_path('coarse_fine_power_vs_code.png'), ch =ch)
+    architecture.plot_characteristic_vs_code(t_range_ns=max_delay_ns, save_path=out_path('coarse_fine_delay_vs_code.pdf'), ch=ch, policy_meta=policy_meta)
+    architecture.plot_power_vs_code(avg_over_target_range_ns=max_delay_ns, avg_num_points=200, save_path=out_path('coarse_fine_power_vs_code.pdf'), ch =ch)
 
-    architecture.plot_single_block_characteristic('coarse', save_path=out_path('coarse_only_delay_vs_code.png'))
-    architecture.plot_single_block_nonlinearity('coarse', save_path=out_path('coarse_only_dnl_inl.png'))
-    architecture.plot_coarse_nonlinearity_ps(mc_runs=int(CONFIG["mc_runs"]), save_path=out_path('coarse_only_dnl_inl_ps.png'))
-    architecture.plot_single_block_characteristic('fine', save_path=out_path('fine_only_delay_vs_code.png'))
-    architecture.plot_single_block_nonlinearity('fine', save_path=out_path('fine_only_dnl_inl.png'))
+    architecture.plot_single_block_characteristic('coarse', save_path=out_path('coarse_only_delay_vs_code.pdf'))
+    architecture.plot_single_block_nonlinearity('coarse', save_path=out_path('coarse_only_dnl_inl.pdf'))
+    architecture.plot_coarse_nonlinearity_ps(mc_runs=int(CONFIG["mc_runs"]), save_path=out_path('coarse_only_dnl_inl_ps.pdf'))
+    architecture.plot_single_block_characteristic('fine', save_path=out_path('fine_only_delay_vs_code.pdf'))
+    architecture.plot_single_block_nonlinearity('fine', save_path=out_path('fine_only_dnl_inl.pdf'))
 
 
     mc_stats = run_mc_mismatch_analysis(
@@ -588,7 +672,7 @@ def main() -> None:
         mc_runs=int(CONFIG["mc_runs"]),
         dnl_limit_lsb=float(CONFIG["dnl_limit_lsb"]),
         t_range_ns=max_delay_ns,
-        save_path=out_path('coarse_fine_mc_mismatch.png'),
+        save_path=out_path('coarse_fine_mc_mismatch.pdf'),
     )
     # print(f"Probability of staying below {CONFIG['dnl_limit_lsb']:.1f} LSB = {mc_stats['pass_probability_percent']:.2f}%")
 
@@ -600,10 +684,10 @@ def main() -> None:
         print("=" * 70)
 
         mode_configs = [
-            ("CS-CS", "constant", "constant"),
-            ("CS-VS", "constant", "variable"),
             ("VS-CS", "variable", "constant"),
             ("VS-VS", "variable", "variable"),
+            ("CS-CS", "constant", "constant"),
+            ("CS-VS", "constant", "variable"),
         ]
         if bool(CONFIG.get("include_delay_line_modes", False)):
             mode_configs.extend([
@@ -723,7 +807,7 @@ def main() -> None:
             f"P_max={winner['max_total_power_w']*1e6:.3f} uW"
         )
 
-        pmax_plot_path = out_path("coarse_fine_opt_pmax_vs_vdd.png")
+        pmax_plot_path = out_path("coarse_fine_opt_pmax_vs_vdd.pdf")
         _plot_optimization_metric_vs_vdd(
             records=optimization_rows,
             mode_configs=mode_configs,
@@ -734,7 +818,7 @@ def main() -> None:
             save_path=pmax_plot_path,
         )
 
-        pavg_plot_path = out_path("coarse_fine_opt_pavg_vs_vdd.png")
+        pavg_plot_path = out_path("coarse_fine_opt_pavg_vs_vdd.pdf")
         _plot_optimization_metric_vs_vdd(
             records=optimization_rows,
             mode_configs=mode_configs,

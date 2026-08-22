@@ -10,11 +10,6 @@ from plot_style import apply_science_style, _multi_panel_figsize
 
 apply_science_style()
 
-LABEL_SIZE = plt.rcParams.get("axes.labelsize", 10)
-TITLE_SIZE = plt.rcParams.get("axes.titlesize", 9)
-TICK_SIZE = plt.rcParams.get("xtick.labelsize", 8)
-LEGEND_SIZE = plt.rcParams.get("legend.fontsize", 6)
-ANNOTATION_SIZE = plt.rcParams.get("font.size", 6)
 
 # ============================================================
 # CORE FUNCTIONS
@@ -177,25 +172,24 @@ def plot_power_breakdown(ax, data_dict, best_n, title_suffix="", resolution_s=No
     corner_i_ch = best_data["I_ch_corner"]
     corner_c_ramp = best_data["C_ramp_corner"]
     
-    ax.semilogy(t_ns, best_data["P_list"] * 1e6, 'k', linewidth=1, label='Total Power')
-    ax.semilogy(t_ns, best_data["P_ana"] * 1e6, '--', color='#D62728', linewidth=1,
-                label='$P_{DTC,max}$', alpha=1)
-    ax.semilogy(t_ns, best_data["P_cnt"] * 1e6, '--', color='#1F77B4', linewidth=1,
-                label='$P_{cnt}$ ', alpha=1)
-    ax.semilogy(t_ns, best_data["P_dyn"] * 1e6, '--', color='#2CA02C', linewidth=1,
-                label='$P_{DTC,dyn}$', alpha=1)
+    ax.semilogy(t_ns, best_data["P_list"] * 1e6, 'k', linewidth=2, label=r'$\mathrm{P}_\mathrm{total}$')
+    ax.semilogy(t_ns, best_data["P_ana"] * 1e6, '--', color=plt.cm.tab10(0), linewidth=2,
+                label=r'$P_{DTC,max}$', alpha=1)
+    ax.semilogy(t_ns, best_data["P_cnt"] * 1e6, '--', color=plt.cm.tab10(1), linewidth=2,
+                label=r'$P_\mathrm{cnt}$ ', alpha=1)
+    ax.semilogy(t_ns, best_data["P_dyn"] * 1e6, '--', color=plt.cm.tab10(2), linewidth=2,
+                label=r'$P_\mathrm{DTC,dyn}$', alpha=1)
     ax.scatter(best_data["t_corner"]*1e9, best_data["p_corner"]*1e6, color='red', s=50,
                edgecolors='black', linewidths=0.2, zorder=10, marker='o')
     x_res_ns = best_data["t_corner"] * 1e9
     ax.axvspan(x_res_ns, np.max(t_ns), color='red', alpha=0.08, zorder=0)
-    ax.axvline(x_res_ns, linestyle='--', color='#7F7F7F', linewidth=1.0,
-               label='Resolution not met')
-    ax.set_xlabel(r'$\Delta t$ [ns]', fontsize=LABEL_SIZE, fontweight='bold')
-    ax.set_ylabel('Power [µW]', fontsize=LABEL_SIZE, fontweight='bold')
-    ax.set_title(title_suffix, fontsize=TITLE_SIZE, fontweight='bold', pad=10)
+    ax.axvline(x_res_ns, linestyle='--', color='#7F7F7F', linewidth=1.0)
+    ax.set_xlabel(r'$\Delta t$ $\mathrm{[ns]}$',  fontweight='bold')
+    ax.set_ylabel(r'$\mathrm{Power} \; [\mu\mathrm{W}]$',  fontweight='bold')
+    # ax.set_title(title_suffix,  fontweight='bold', pad=10)
     ax.grid(True, which="both", linestyle='--', alpha=0.2, linewidth=1.0, color="#b7b7b7")
     ax.set_axisbelow(True)
-    ax.legend(fontsize=6, framealpha=0.96, edgecolor='black')
+    ax.legend(frameon = False, loc='lower right', fontsize=10)
 
 def plot_all_bits(ax, data_dict, title="", bits_to_plot=None):
     """Plot bit configurations. Optionally filter to a subset via `bits_to_plot` (iterable of ints)."""
@@ -203,19 +197,19 @@ def plot_all_bits(ax, data_dict, title="", bits_to_plot=None):
     for n, data in data_dict.items():
         if bits_to_plot is not None and n not in bits_to_plot:
             continue
-        ax.semilogy(data["T_list"]*1e9, data["P_list"]*1e6, alpha=0.5, linewidth=1.0, label=f'{n} bits')
+        ax.semilogy(data["T_list"]*1e9, data["P_list"]*1e6, alpha=1, linewidth=2.0, label=rf'$\mathrm{{{n}}} \; \mathrm{{bits}}$', color=plt.cm.tab10(n%10))
         t_corners.append(data["t_corner"] * 1e9)
         p_corners.append(data["p_corner"] * 1e6)
     
     ax.scatter(t_corners, p_corners, color='red', s=50, zorder=5, edgecolors='black',
-               linewidths=0.2, label='Corner Points')
+               linewidths=0.2, label=r'$\mathrm{Best} \; \mathrm{Corner} $')
     
-    ax.set_xlabel(r'$\Delta t$ [ns]', fontsize=LABEL_SIZE, fontweight='bold')
-    ax.set_ylabel('Power [µW]', fontsize=LABEL_SIZE, fontweight='bold')
-    ax.set_title(title, fontsize=TITLE_SIZE, fontweight='bold', pad=10)
+    ax.set_xlabel(r'$\Delta t$ $\mathrm{[ns]}$',  fontweight='bold')
+    ax.set_ylabel(r'$\mathrm{Power} \; [\mu\mathrm{W}]$',  fontweight='bold')
+    # ax.set_title(title,  fontweight='bold', pad=10)
     ax.grid(True, which="both", linestyle='--', alpha=0.2, linewidth=1.0, color="#b7b7b7")
     ax.set_axisbelow(True)
-    ax.legend(fontsize=6, framealpha=0.96, edgecolor='black', ncol=2)
+    ax.legend(frameon=False, fontsize=10)
 
 def plot_frontier_with_all_k_slopes(ax, K_slopes, VDD, C_load, k_lim, Cu0, res, NBITS, 
                                      use_bit_extension=False, title="", colors=None,
@@ -223,7 +217,7 @@ def plot_frontier_with_all_k_slopes(ax, K_slopes, VDD, C_load, k_lim, Cu0, res, 
                                      preferred_bits=None):
     """Plot frontier curves for different K_slope values."""
     if colors is None:
-        colors = ['#1F77B4', '#FF7F0E', '#2CA02C', '#D62728', '#9467BD']
+        colors = [plt.cm.tab10(i) for i in range(len(K_slopes))]
     if preferred_bits is None:
         preferred_bits = [3, 5, 8, 9, 10, 11, 12]
     annotated_bits = [3, 5, 9, 10, 11, 12]
@@ -255,9 +249,9 @@ def plot_frontier_with_all_k_slopes(ax, K_slopes, VDD, C_load, k_lim, Cu0, res, 
         n_plot = [n_vals[i] for i in selected_indices]
         
         color = colors[idx % len(colors)]
-        ax.plot(t_plot, p_plot, 'o-', color=color, linewidth=1.0, markersize=3.5,
+        ax.plot(t_plot, p_plot, 'o-', color=color, linewidth=2, markersize=3.5,
                 markeredgewidth=0.6, markeredgecolor='white',
-                label=f'$K_{{slope}}$ = {k_s/1e6:.0f} MV/s')
+                label=rf'${k_s/1e6:.0f} \; \mathrm{{MV/s}}$')
         
         for i, n in enumerate(n_plot):
             if n not in annotated_bits:
@@ -268,7 +262,7 @@ def plot_frontier_with_all_k_slopes(ax, K_slopes, VDD, C_load, k_lim, Cu0, res, 
                 textcoords="offset points",
                 xytext=(0, 7 + 3 * (i % 2)),
                 ha='center',
-                fontsize=ANNOTATION_SIZE - 1,
+                fontsize=10,
                 fontweight='bold',
                 bbox=dict(boxstyle='round,pad=0.15', facecolor='white', edgecolor='none', alpha=0.7),
             )
@@ -279,12 +273,12 @@ def plot_frontier_with_all_k_slopes(ax, K_slopes, VDD, C_load, k_lim, Cu0, res, 
             p_min.append(min(p_vals))
 
     ax.set_yscale('log')
-    ax.set_xlabel(r'$\Delta t$ [ns]', fontsize=LABEL_SIZE, fontweight='bold')
-    ax.set_ylabel('Power [µW]', fontsize=LABEL_SIZE, fontweight='bold')
-    ax.set_title(title, fontsize=TITLE_SIZE, fontweight='bold', pad=10)
+    ax.set_xlabel(r'$\Delta t$ $\mathrm{[ns]}$', fontweight='bold')
+    ax.set_ylabel(r'$\mathrm{Power} \; [\mu\mathrm{W}]$', fontweight='bold')
+    # ax.set_title(title, fontweight='bold', pad=10)
     ax.grid(True, which="both", linestyle='--', alpha=0.6, linewidth=1.0, color="#b7b7b7")
     ax.set_axisbelow(True)
-    ax.legend(fontsize=LEGEND_SIZE, framealpha=0.96, edgecolor='black')
+    ax.legend( frameon=False, loc = 'best', fontsize=8, title=r"$\mathrm{K}_{\mathrm{slope}}$", title_fontsize=10)
     if t_max:
         ax.set_xlim(left=0.05, right=max(t_max) * 1.05)
     if p_max:
@@ -315,18 +309,18 @@ def plot_optimal_frontier(ax, min_points, title="", mode_label=""):
             textcoords="offset points",
             xytext=(0, 8),
             ha='center',
-            fontsize=4,
+            fontsize=10,
             fontweight='bold',
             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='gray', alpha=0.8),
         )
     
     ax.set_yscale('log')
-    ax.set_xlabel(r'Optimal $\Delta t$ [ns]', fontsize=LABEL_SIZE, fontweight='bold')
-    ax.set_ylabel('Minimum Power [µW]', fontsize=LABEL_SIZE, fontweight='bold')
-    ax.set_title(title, fontsize=TITLE_SIZE, fontweight='bold', pad=10)
+    ax.set_xlabel(r'$\mathrm{Optimal} \; \Delta t \; (\mathrm{ns})$', fontweight='bold')
+    ax.set_ylabel(r'$\mathrm{Minimum} \; \mathrm{Power} \; [\mu\mathrm{W}]$', fontweight='bold')
+    ax.set_title(title,  fontweight='bold', pad=10)
     ax.grid(True, which="both", linestyle='--', alpha=0.6, linewidth=1.0, color="#b7b7b7")
     ax.set_axisbelow(True)
-    ax.legend(fontsize=LEGEND_SIZE, framealpha=0.96, edgecolor='black')
+    ax.legend( framealpha=0.96, loc = 'best', fontsize=8)
 
 # ============================================================
 # CONFIGURATION SECTION
@@ -370,31 +364,31 @@ plot_power_breakdown(ax2, results, best_n,
                      f'Power Breakdown: {best_n} bits, K_slope={best_corner_global["K_slope_MV"]:.0f} MV/s',
                      resolution_s=res)
 plt.tight_layout()
-fig.savefig(SAVE_DIR / "all_bits_and_best_case.png", dpi=300, bbox_inches='tight')
-print(f"Saved: all_bits_and_best_case.png")
+fig.savefig(SAVE_DIR / "all_bits_and_best_case.pdf", dpi=300, bbox_inches='tight')
+print(f"Saved: all_bits_and_best_case.pdf")
 
 # Additional plot: K_slope = 300 MV/s, only bits 8-12
 K_TARGET = 300e6
-results_ks300 = power_method(VDD, K_TARGET, C_load, k_lim, Cu0, res, NBITS, use_bit_extension=False)
+results_ks300 = power_method(VDD, K_TARGET, C_load, k_lim, Cu0, res, NBITS, use_bit_extension=True)
 if results_ks300:
     fig_ks300, ax_ks300 = plt.subplots()
     plot_all_bits(ax_ks300, results_ks300, f"K_slope = {K_TARGET/1e6:.0f} MV/s", bits_to_plot=range(8, 13))
     plt.tight_layout()
-    fig_ks300.savefig(SAVE_DIR / f"all_bits_Ks_{int(K_TARGET/1e6)}_8to12.png", dpi=300, bbox_inches='tight')
-    print(f"Saved: all_bits_Ks_{int(K_TARGET/1e6)}_8to12.png")
+    fig_ks300.savefig(SAVE_DIR / f"all_bits_Ks_{int(K_TARGET/1e6)}_8to12.pdf", dpi=300, bbox_inches='tight')
+    print(f"Saved: all_bits_Ks_{int(K_TARGET/1e6)}_8to12.pdf")
 
 # Frontier curves for different K_slopes
 fig2, ax = plt.subplots()
 plot_frontier_with_all_k_slopes(ax, K_slopes, VDD, C_load, k_lim_val, Cu0, res, NBITS,
                                 use_bit_extension=False, title="Corner Point Frontier (Regular Mode)")
-fig2.savefig(SAVE_DIR / "frontier_curves_kslopes.png", dpi=300, bbox_inches='tight')
-print(f"Saved: frontier_curves_kslopes.png")
+fig2.savefig(SAVE_DIR / "frontier_curves_kslopes.pdf", dpi=300, bbox_inches='tight')
+print(f"Saved: frontier_curves_kslopes.pdf")
 
 # Optimal frontier
 fig3, ax = plt.subplots()
 plot_optimal_frontier(ax, min_points, title=f'Optimal Power Points')
-fig3.savefig(SAVE_DIR / "optimal_design_frontier.png", dpi=300, bbox_inches='tight')
-print(f"Saved: optimal_design_frontier.png")
+fig3.savefig(SAVE_DIR / "optimal_design_frontier.pdf", dpi=300, bbox_inches='tight')
+print(f"Saved: optimal_design_frontier.pdf")
 
 # ============================================================
 # BIT EXTENSION MODE OPTIMIZATION
@@ -426,31 +420,31 @@ plot_all_bits(
     results_bext_opt,
     f"Configuration: $K_{{slope}}$={best_corner_global_bext['K_slope_MV']:.0f} MV/s",
 )
-plt.tight_layout()
-fig_bext_all.savefig(SAVE_DIR / "all_bits_bitextension_optimized.png", dpi=300, bbox_inches='tight')
-print(f"Saved: all_bits_bitextension_optimized.png")
+
+fig_bext_all.savefig(SAVE_DIR / "all_bits_bitextension_optimized.pdf", dpi=300, bbox_inches='tight')
+print(f"Saved: all_bits_bitextension_optimized.pdf")
 
 fig_bext_best, ax_bext_best = plt.subplots(1, 1, figsize=_multi_panel_figsize(1, 1))
 plot_power_breakdown(ax_bext_best, results_bext_opt, best_n_bext_opt,
                      f'Power Breakdown: {best_n_bext_opt} bits',
                      resolution_s=res)
-plt.tight_layout()
-fig_bext_best.savefig(SAVE_DIR / "best_case_bitextension_optimized.png", dpi=300, bbox_inches='tight')
-print(f"Saved: best_case_bitextension_optimized.png")
+
+fig_bext_best.savefig(SAVE_DIR / "best_case_bitextension_optimized.pdf", dpi=300, bbox_inches='tight')
+print(f"Saved: best_case_bitextension_optimized.pdf")
 
 # Frontier curves for bit extension
 fig_bext_frontier, ax_bext_frontier = plt.subplots()
 plot_frontier_with_all_k_slopes(ax_bext_frontier, K_slopes, VDD, C_load, k_lim_val, Cu0, res, NBITS,
                                 use_bit_extension=True, title=r"$K_{slope}$ optimization")
-fig_bext_frontier.savefig(SAVE_DIR / "frontier_curves_kslopes_bitextension.png", dpi=300, bbox_inches='tight')
-print(f"Saved: frontier_curves_kslopes_bitextension.png")
+fig_bext_frontier.savefig(SAVE_DIR / "frontier_curves_kslopes_bitextension.pdf", dpi=300, bbox_inches='tight')
+print(f"Saved: frontier_curves_kslopes_bitextension.pdf")
 
 # Optimal frontier (bit extension)
 fig_bext_opt_frontier, ax_bext_opt_frontier = plt.subplots()
 plot_optimal_frontier(ax_bext_opt_frontier, min_points_bext,
                       title=f'Optimal Power Points')
-fig_bext_opt_frontier.savefig(SAVE_DIR / "optimal_design_frontier_bitextension.png", dpi=300, bbox_inches='tight')
-print(f"Saved: optimal_design_frontier_bitextension.png")
+fig_bext_opt_frontier.savefig(SAVE_DIR / "optimal_design_frontier_bitextension.pdf", dpi=300, bbox_inches='tight')
+print(f"Saved: optimal_design_frontier_bitextension.pdf")
 
 # ============================================================
 # COMPARISON PLOT
@@ -463,12 +457,12 @@ p_mins_regular = [m['p_uw'] for m in min_points]
 t_mins_bext = [m['t_ns'] for m in min_points_bext]
 p_mins_bext = [m['p_uw'] for m in min_points_bext]
 
-ax_comp.plot(t_mins_regular, p_mins_regular, 'o-', markersize=8, linewidth=0.2,
-             color='#1F77B4', markeredgewidth=2, markeredgecolor='white',
-             label='Regular Mode', zorder=5)
-ax_comp.plot(t_mins_bext, p_mins_bext, 's-', markersize=8, linewidth=0.2,
-             color='#FF7F0E', markeredgewidth=2, markeredgecolor='white',
-             label='Bit Extension Mode', zorder=5)
+ax_comp.plot(t_mins_regular, p_mins_regular, 'o-', markersize=8, linewidth=2,
+             color=plt.cm.tab10(0), markeredgewidth=2, markeredgecolor='white',
+             label=r'$\mathrm{Regular \; Mode}$', zorder=5)
+ax_comp.plot(t_mins_bext, p_mins_bext, 's-', markersize=8, linewidth=2,
+             color=plt.cm.tab10(1), markeredgewidth=2, markeredgecolor='white',
+             label=r'$\mathrm{Bit \; Extension \; Mode}$', zorder=5)
 
 # Mark global minimums
 best_idx_regular = min_points.index(best_corner_global)
@@ -476,27 +470,26 @@ best_idx_bext = min_points_bext.index(best_corner_global_bext)
 
 ax_comp.scatter([t_mins_regular[best_idx_regular]], [p_mins_regular[best_idx_regular]],
                 marker='*', s=100, color='gold', edgecolors='red', linewidths=0.2, zorder=25,
-                label='Global Min (Regular)')
+                label=r'$\mathrm{Global \; Min \; (Regular)}$')
 ax_comp.scatter([t_mins_bext[best_idx_bext]], [p_mins_bext[best_idx_bext]],
                 marker='*', s=100, color='lime', edgecolors='darkgreen', linewidths=0.2, zorder=25,
-                label='Global Min (Bit Extension)')
+                label=r'$\mathrm{Global \; Min \; (Bit \; Extension)}$')
 
 ax_comp.set_yscale('log')
-ax_comp.set_xlabel(r'Optimal $\Delta t$ [ns]', fontsize=LABEL_SIZE, fontweight='bold')
-ax_comp.set_ylabel('Minimum Power [µW]', fontsize=LABEL_SIZE, fontweight='bold')
-ax_comp.set_title(
-    f'Comparison: Regular vs Bit Extension Mode ($k_{{lim}}$={k_lim_val})',
-    fontsize=TITLE_SIZE,
-    fontweight='bold',
-    pad=10,
-)
+ax_comp.set_xlabel(r'$\Delta t$ $\mathrm{[ns]}$', fontweight='bold')
+ax_comp.set_ylabel(r'$P_{\mathrm{min}}\;\mathrm{[\mu W]}$', fontweight='bold')
+# ax_comp.set_title(
+#     f'Comparison: Regular vs Bit Extension Mode ($k_{{lim}}$={k_lim_val})',
+#     fontweight='bold',
+#     pad=10,
+# )
 ax_comp.grid(True, which="both", linestyle='--', alpha=0.6, linewidth=1.0, color="#b7b7b7")
 ax_comp.set_axisbelow(True)
-ax_comp.legend(fontsize=LEGEND_SIZE, framealpha=0.96, edgecolor='black', loc='best')
+ax_comp.legend(fontsize=6, framealpha=0.96,  loc='best')
 
 plt.tight_layout()
-fig_comparison.savefig(SAVE_DIR / "comparison_regular_vs_bitextension.png", dpi=300, bbox_inches='tight')
-print(f"Saved: comparison_regular_vs_bitextension.png")
+fig_comparison.savefig(SAVE_DIR / "comparison_regular_vs_bitextension.pdf", dpi=300, bbox_inches='tight')
+print(f"Saved: comparison_regular_vs_bitextension.pdf")
 
 # ============================================================
 # SAVE SUMMARY FILE

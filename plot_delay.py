@@ -8,7 +8,7 @@ import numpy as np
 import argparse
 from pathlib import Path
 
-from plot_style import apply_science_style, _multi_panel_figsize, maybe_title, maybe_suptitle
+from plot_style import HAS_SCIENCEPLOTS, SCIENCE_STYLE, apply_science_style, _multi_panel_figsize, maybe_title, maybe_suptitle
 
 # ============================================================================
 # QUICK CLI CHEATSHEET (run from project root)
@@ -578,8 +578,9 @@ class CadencePlotter:
 
         # Convert L(f) [dBc/Hz] to phase noise PSD Sphi [rad^2/Hz]
         s_phi = 2.0 * np.power(10.0, pn / 10.0)
-        integral = np.trapz(s_phi, f)
+        integral = np.trapezoid(s_phi, f)
         jitter_rms = np.sqrt(integral) / (2.0 * np.pi * carrier_hz)
+        print(f"Computed RMS jitter: {jitter_rms * 1e12:.2f} ps") if jitter_rms is not None else print("RMS jitter computation failed.")
         return float(jitter_rms)
 
     def plot_phase_noise_comparison(self, cs_filename, vs_filename=None, title=None, log_x=True, carrier_hz=None, label_a=None, label_b=None):
@@ -601,13 +602,14 @@ class CadencePlotter:
 
         cs_sweeps = self._extract_phase_noise_sweeps(cs_df)
         vs_sweeps = self._extract_phase_noise_sweeps(vs_df) if vs_df is not None else []
+        
         if not cs_sweeps and not vs_sweeps:
             print("Warning: No phase noise sweeps found.")
             return
 
         # Ensure uniform Pre/Post label strings
-        label_a = "Pre" if not label_a else label_a.strip()
-        label_b = "Post" if not label_b else label_b.strip()
+        label_a = r"$\mathrm{Pre}$" if not label_a else label_a.strip()
+        label_b = r"$\mathrm{Post}$" if not label_b else label_b.strip()
         
         # Sort keys to pair identical sweep conditions to the exact same color mapping index
         all_keys = sorted({s.get("color_key", s["label"]) for s in cs_sweeps + vs_sweeps})
@@ -636,42 +638,50 @@ class CadencePlotter:
                 return " ".join(words)
             return text_str
 
+        curve_color =plt.cm.tab10(0)   # Blue for Pre
+        curve_color_b = plt.cm.tab10(1) # Orange for Post
+
         # 1. Plot File A: Pre-layout Curves (Dashed Line)
+        i=0
         for sweep in cs_sweeps:
             jitter_rms = self._compute_jitter_rms(sweep["x"], sweep["y"], carrier_hz)
-            jitter_label = f" | RMS={jitter_rms * 1e12:.2f} ps" if jitter_rms is not None else ""
+            print(f" | RMS={jitter_rms * 1e12:.2f} ps") if jitter_rms is not None else ""
             color_key = sweep.get("color_key", sweep["label"])
-            curve_color = label_colors.get(color_key, cmap(0))
-            
-            clean_sweep_label = latex_format_string(sweep['label'])
+               
+            clean_sweep_label = [0,31]
             ax.plot(
                 sweep["x"],
                 sweep["y"],
                 color=curve_color,
                 linestyle='--',
                 linewidth=2.2,
-                label=f"{label_a} {clean_sweep_label}{jitter_label}",
+                label=f"{label_a} {clean_sweep_label[i]}",
             )
+            i += 1
 
         # 2. Plot File B: Post-layout Curves (Solid Line)
+        i=0
         for sweep in vs_sweeps:
             jitter_rms = self._compute_jitter_rms(sweep["x"], sweep["y"], carrier_hz)
-            jitter_label = f" | RMS={jitter_rms * 1e12:.2f} ps" if jitter_rms is not None else ""
+            print(f" | RMS={jitter_rms * 1e12:.2f} ps") if jitter_rms is not None else ""
             color_key = sweep.get("color_key", sweep["label"])
             curve_color = label_colors.get(color_key, cmap(1))
             
-            clean_sweep_label = latex_format_string(sweep['label'])
+            clean_sweep_label = [0,31]
             ax.plot(
                 sweep["x"],
                 sweep["y"],
-                color=curve_color,
+                color=curve_color_b,
                 linestyle='-',
                 linewidth=2.2,
-                label=f"{label_b} {clean_sweep_label}{jitter_label}",
+                label=f"{label_b} {clean_sweep_label[i]}",
             )
+            i += 1
 
         if log_x:
             ax.set_xscale('log')
+        
+        
 
         plot_title = title or "Phase Noise Comparison"
         plot_title = latex_format_string(plot_title)
@@ -679,23 +689,19 @@ class CadencePlotter:
         if hasattr(self, '_format_plot_labels'):
             self._format_plot_labels(
                 ax,
-                xlabel="Offset Frequency (Hz)",
-                ylabel="Phase Noise (dBc/Hz)",
+                xlabel=r"$\mathrm{Offset~Frequency~[Hz]}$",
+                ylabel=r"$\mathrm{Phase~Noise~[dBc/Hz]}$",
                 title=plot_title,
             )
         else:
-            ax.set_xlabel("Offset Frequency (Hz)", fontsize=11, fontweight='bold')
-            ax.set_ylabel("Phase Noise (dBc/Hz)", fontsize=11, fontweight='bold')
+            ax.set_xlabel(r"$\mathrm{Offset~Frequency~[Hz]}$", fontsize=12, fontweight='bold')
+            ax.set_ylabel(r"$\mathrm{Phase~Noise~[dBc/Hz]}$", fontsize=12, fontweight='bold')
             ax.set_title(plot_title, fontsize=12, fontweight='bold')
 
         # 3. Corrected crisp black-bordered font-15 legend configuration
         ax.legend(
             loc='best', 
-            fontsize=5, 
-            framealpha=1.0, 
-            edgecolor='black', 
-            facecolor='white',
-            labelcolor='black'
+            fontsize=10, 
         )
         
         if hasattr(self, '_apply_grid_styling'):
@@ -909,11 +915,11 @@ class CadencePlotter:
 
         # 2. Plot Pre-layout array profile (Dashed Line)
         if y_plot_a is not None:
-            ax.plot(plot_codes, y_plot_a, color=curve_color, linestyle='--', linewidth=2, label='Pre')
+            ax.plot(plot_codes, y_plot_a, color=curve_color, linestyle='--', linewidth=2, label=r'$\mathrm{Pre}$')
 
         # 3. Plot Post-layout array profile (Solid Line)
         if y_plot_b is not None:
-            ax.plot(plot_codes, y_plot_b, color=curve_color_b, linestyle='-', linewidth=2, label='Post')
+            ax.plot(plot_codes, y_plot_b, color=curve_color_b, linestyle='-', linewidth=2, label=r'$\mathrm{Post}$')
 
         # Formatting titles safely using internal format managers
         target_name = file_b if file_b else (file_a if file_a else filename)
@@ -923,30 +929,47 @@ class CadencePlotter:
         if hasattr(self, '_format_plot_labels'):
             self._format_plot_labels(
                 ax,
-                xlabel="Digital Code",
-                ylabel="$P_{\\text{tot}}$ ($\\mu W$)",
+                xlabel=r"$\mathrm{Digital}~\mathrm{Code}$",
+                ylabel=r"$P_{\mathrm{tot}}$ $[\mathrm{\mu W}]$",  # <-- Fixed here
                 title=clean_title
             )
         else:
-            ax.set_xlabel("Digital Code")
-            ax.set_ylabel("$P_{\\text{tot}}$ ($\\mu W$)")
+            ax.set_xlabel(r"$\mathrm{Digital}~\mathrm{Code}$", fontsize=12, fontweight='bold')
+            ax.set_ylabel(r"$P_{\mathrm{tot}}$ $[\mathrm{\mu W}]$", fontsize=12, fontweight='bold')  # <-- Fixed here
             ax.set_title(clean_title, fontweight='bold')
-
-        # 4. Apply clean black-bordered crisp legend configuration
         ax.legend(
             loc='best', 
             fontsize=12, 
-            framealpha=1.0, 
-            edgecolor='black', 
-            facecolor='white',
-            labelcolor='black'
+            
         )
 
         if hasattr(self, '_apply_grid_styling'):
             self._apply_grid_styling(ax, alpha=0.35)
         else:
             ax.grid(True, linestyle='--', alpha=0.35)
+
+        # =========================================================================
+        # NEW STEP: Export Plotted Micro-watt Data to CSV
+        # =========================================================================
+        csv_data = {"digital_code": plot_codes}
+        if y_plot_a is not None:
+            csv_data["pre_layout_power_uW"] = np.round(y_plot_a, 4)
+        if y_plot_b is not None:
+            csv_data["post_layout_power_uW"] = np.round(y_plot_b, 4)
             
+        power_df = pd.DataFrame(csv_data)
+        
+        # Establish the out file spreadsheet directory location
+        if hasattr(self, '_get_save_path'):
+            csv_out_path = self._get_save_path(target_name, "Avg_Power", "avg_power_by_code")
+            csv_out_path = Path(csv_out_path).with_suffix('.csv')
+        else:
+            csv_out_path = self.plot_dir / "avg_power_by_code.csv"
+            
+        power_df.to_csv(csv_out_path, index=False)
+        print(f"SUCCESS: Logged active plot trace parameters to lookup table:\n  -> {csv_out_path}")
+        # =========================================================================
+        #     
         plt.tight_layout()
 
         # Save directly to the publication-ready vector PDF profile extension format
@@ -1016,7 +1039,7 @@ class CadencePlotter:
         codes_b, y_plot_b = process_sweep_dataframe(df_b)
 
         # Create figure using your standard workspace preferences
-        fig, ax = self._create_figure() if hasattr(self, '_create_figure') else plt.subplots(figsize=(14, 5))
+        fig, ax = self._create_figure() 
         
         # Use two different distinct colors from the high-contrast palette
         curve_color = plt.cm.tab10(0)   # Blue for Pre
@@ -1024,11 +1047,11 @@ class CadencePlotter:
 
         # 2. Plot Pre-layout Sweep Profile (Dashed Line)
         if y_plot_a is not None:
-            ax.plot(codes_a, y_plot_a, color=curve_color, linestyle='--', linewidth=2.6, label='Pre')
+            ax.plot(codes_a, y_plot_a*1e6, color=curve_color, linestyle='--', linewidth=2, label=r'$\mathrm{Pre}$')
 
         # 3. Plot Post-layout Sweep Profile (Solid Line)
         if y_plot_b is not None:
-            ax.plot(codes_b, y_plot_b, color=curve_color_b, linestyle='-', linewidth=2.6, label='Post')
+            ax.plot(codes_b, y_plot_b*1e6, color=curve_color_b, linestyle='-', linewidth=2, label=r'$\mathrm{Post}$')
 
         # Formatting titles safely using internal format managers
         target_name = file_b if file_b else (file_a if file_a else filename)
@@ -1068,30 +1091,27 @@ class CadencePlotter:
                     
                     if "_" in word:
                         base, subscript = word.split("_", 1)
-                        words[w_idx] = f"${base}_{{{{\\text{{{subscript}}}}}}}${punctuation}"
+                        words[w_idx] = rf"$\mathrm{{{base}_{{\mathrm{{{subscript}}}}}}}~[\mathrm{{ps}}]$"
             y_label_text = " ".join(words)
 
         if hasattr(self, '_format_plot_labels'):
             self._format_plot_labels(
                 ax,
-                xlabel="Digital Code",
-                ylabel=y_label_text,
+                xlabel=r"$\mathrm{Digital~Code}$",
+                ylabel=r"$I_\mathrm{ch}$ $[\mathrm{\mu A}]$",
                 title=clean_title
             )
         else:
-            ax.set_xlabel("Digital Code", fontsize=11, fontweight='bold')
-            ax.set_ylabel(y_label_text, fontsize=11, fontweight='bold')
+            ax.set_xlabel(r"$\mathrm{Digital~Code}$", fontsize=12, fontweight='bold')
+            ax.set_ylabel(y_label_text, fontsize=12, fontweight='bold')
             ax.set_title(clean_title, fontsize=12, fontweight='bold')
 
         # 4. Corrected crisp black-bordered font-15 legend configuration
-        ax.legend(
-            loc='best', 
-            fontsize=15, 
-            framealpha=1.0, 
-            edgecolor='black', 
-            facecolor='white',
-            labelcolor='black'
-        )
+        # ax.legend(
+        #     loc='best', 
+        #     fontsize=12, 
+        #     framealpha=1.0, 
+        # )
 
         if hasattr(self, '_apply_grid_styling'):
             self._apply_grid_styling(ax, alpha=0.35)
@@ -1200,7 +1220,8 @@ class CadencePlotter:
             print(f"Removed redundant middle code at index {removed_idx}")
         
         # Create figure with 2 subplots (DNL and INL)
-        fig, (ax_dnl, ax_inl) = self._create_figure(nrows=2, ncols=1, sharex=True)
+        fig_dnl, ax_dnl = self._create_figure()
+        
         
         for iter_idx in range(num_realizations):
             delays = data_clean.iloc[:, iter_idx].values
@@ -1215,35 +1236,51 @@ class CadencePlotter:
             
             # Plot with subtle styling
             ax_dnl.plot(codes, dnl,
-                        alpha=0.2, linewidth=1.2)
-            ax_inl.plot(codes, inl,
-                        alpha=0.2, linewidth=1.2)
+                        alpha=0.2, linewidth=0.7, color=plt.cm.tab10(0))
+            
         
         # Formatting
         thesis_title_dnl = self._get_thesis_title(filename, "mc_linearity_all")
         clean_title = self._format_title(thesis_title_dnl)
         
-        ax_dnl.set_ylabel("DNL (LSB)", fontsize=12, fontweight='bold')
+        ax_dnl.set_ylabel(r"$\mathrm{DNL}$ $[\mathrm{LSB}]$", fontsize=12)
         maybe_suptitle(ax_dnl, clean_title, fontsize=14, fontweight='bold', pad=15)
         self._apply_grid_styling(ax_dnl, alpha=0.35)
         ax_dnl.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
-        ax_dnl.axhline(y=0.5, color='red', linestyle='--', linewidth=1, alpha=0.6, label='±0.5 LSB')
-        ax_dnl.axhline(y=-0.5, color='red', linestyle='--', linewidth=1, alpha=0.6)
-        ax_dnl.set_ylim(-0.7, 0.7)
-        ax_dnl.legend(fontsize=10, loc='upper right', framealpha=0.95)
+        ax_dnl.axhline(y=0.5, color='gray', linestyle='--', linewidth=1, alpha=0.6, label='±0.5 LSB')
+        ax_dnl.axhline(y=-0.5, color='gray', linestyle='--', linewidth=1, alpha=0.6)
+        ax_dnl.set_xlabel(r"$\mathrm{Digital}$ $\mathrm{Code}$", fontsize=12, fontweight='bold')
+        save_path = self._get_save_path(filename, "MC_Linearity", f"mc_all_{num_realizations}_dnl")
+        save_path = Path(save_path).with_suffix('.pdf')
+        self._save_figure(fig_dnl, save_path)
+
+        fig_inl, ax_inl = self._create_figure() 
+        for iter_idx in range(num_realizations):
+            delays = data_clean.iloc[:, iter_idx].values
+            codes = np.arange(len(delays))
+            
+            if len(delays) < 2:
+                continue
+
+            dnl, inl, _ = self._compute_dnl_inl(delays)
+            if len(dnl) == 0:
+                continue
+            
         
-        ax_inl.set_ylabel("INL (LSB)", fontsize=12, fontweight='bold')
+            ax_inl.plot(codes, inl,
+                        alpha=0.2, linewidth=0.7, color=plt.cm.tab10(1))
+        
+        ax_inl.set_ylabel(r"$\mathrm{INL}$ $[\mathrm{LSB}]$", fontsize=12, fontweight='bold')
         maybe_suptitle(ax_inl, "Integral Non-Linearity (INL)", fontsize=14, fontweight='bold', pad=15)
-        ax_inl.set_xlabel("Digital Code", fontsize=12, fontweight='bold')
+        ax_inl.set_xlabel(r"$\mathrm{Digital}$ $\mathrm{Code}$", fontsize=12, fontweight='bold')
         self._apply_grid_styling(ax_inl, alpha=0.35)
         ax_inl.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.7)
-        ax_inl.legend(fontsize=10, loc='upper right', framealpha=0.95)
 
         plt.tight_layout()
 
-        save_path = self._get_save_path(filename, "MC_Linearity", f"mc_all_{num_realizations}_dnl_inl")
+        save_path = self._get_save_path(filename, "MC_Linearity", f"mc_all_{num_realizations}_inl")
         save_path = Path(save_path).with_suffix('.pdf')
-        self._save_figure(fig, save_path)
+        self._save_figure(fig_inl, save_path)
 
     def plot_mc_linearity_per_iteration(self, filename, lsb_ns=None, max_iterations=200):
         """
@@ -1303,9 +1340,9 @@ class CadencePlotter:
                 
                 # Plot with transparency - NO LABELS to avoid cluttering
                 ax_dnl.plot(x_labels, dnl,
-                           color=self.colors['secondary'], alpha=0.2, linewidth=1.2)
+                           color=plt.cm.tab10(0), alpha=0.2, linewidth=1.2)
                 ax_inl.plot(x_labels, inl,
-                           color=self.colors['primary'], alpha=0.2, linewidth=1.2)
+                           color=plt.cm.tab10(1), alpha=0.2, linewidth=1.2)
         
         # Formatting
         ax_dnl.set_ylabel("DNL (LSB)", fontsize=12, fontweight='bold')
@@ -1849,18 +1886,20 @@ class CadencePlotter:
         
         fig, ax = plt.subplots()
         ax.plot(df[x_cols[0]], df[y_cols[0]]*1e12, marker=None, 
-               linewidth=2.6)
+               linewidth=2, color =plt.cm.tab10(0))
         
         title = self._format_title(path.stem)
         maybe_title(ax, f"Sweep: {title}"
         , fontsize=14, fontweight='bold', pad=15)
-        ax.set_ylabel(r"Delay [ps]", fontsize=12, fontweight='bold')
-        ax.set_xlabel(r"$V_{dd} \, [V]$", fontsize=12, fontweight='bold')
-        ax.legend(fontsize=10)
+        ax.set_ylabel(r"$t_{\mathrm{delay}} \, [\mathrm{ps}]$", fontweight='bold')
+        ax.set_xlabel(r"$n_\mathrm{fingers}$", fontweight='bold')
+        ax.set_xticks(np.arange(2, 11, 2))
+        # ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
 
         save_path = self._get_save_path(filename, path.name ,"generic_sweep")
+        save_path = save_path.with_suffix('.pdf')  # Ensure the file has a .pdf extension
         self._save_figure(fig, save_path)
         print(f"Saved generic sweep plot to {save_path}")
         plt.close()
@@ -1874,6 +1913,7 @@ class CadencePlotter:
         # Set explicitly 2 ticks for the digital code bus lanes: [0, 1]
         ax.set_yticks([0, 1])
         ax.set_ylim(-0.2, 1.2)
+
         
         total_span = t_max - t_min
 
@@ -1926,9 +1966,10 @@ class CadencePlotter:
             # Bypassed width constraint for the last interval so it always renders
             if (t_end - t_start) > (total_span * 0.01):
                 t_mid = (t_start + t_end) / 2
-                ax.text(t_mid, 0.5, str(dec_val), color='black', va='center', ha='center', 
-                        fontsize=15, fontweight='bold',
-                        bbox=dict(facecolor='white', edgecolor='none', alpha=0.8, pad=1))
+                if t_mid < 1.795e-6 and t_mid > 1.705e-6:  
+                    ax.text(t_mid, 0.5, str(dec_val), color='black', va='center', ha='center', 
+                            fontsize=15, fontweight='bold',
+                            bbox=dict(facecolor='white', edgecolor='none', alpha=0.8, pad=1))
 
     def plot_signals(self, df=None, subplots=True, file_a=None, file_b=None, **kwargs):
         """
@@ -1992,9 +2033,9 @@ class CadencePlotter:
 
         if subplots:
             fig, axes = plt.subplots(
-                nrows=num_signals-1, 
+                nrows=10, 
                 ncols=1, 
-                figsize=(7, 1 *(num_signals-1)), 
+                figsize=(7, 10), 
                 sharex=True, 
                 constrained_layout=True
             )
@@ -2007,7 +2048,7 @@ class CadencePlotter:
         # High-contrast color map to assign a distinct uniform color per signal row
         colors = plt.cm.tab10(np.linspace(0, 1, max(10, num_signals)))
 
-        all_signal_names = ['in_DTC', 'out_DTC','V_ramp' , 'D' ]#['in_DTC','EN_b', 'out_DTC', 'V_cap','V_ramp' , 'B', 'D' ]
+        all_signal_names = ['in_DTC', 'out_DTC_c','V_ramp_c' ,'in_DTC_f', 'EN_b', 'out_DTC', 'V_cap', 'V_ramp_f', 'B_coarse', 'B_fine']#['in_DTC','EN_b', 'out_DTC', 'V_cap','V_ramp' , 'B', 'D' ]
         for idx, name in enumerate(all_signal_names):
             ax = axes[idx] if subplots else axes[0]
             curve_color = colors[idx]
@@ -2017,8 +2058,8 @@ class CadencePlotter:
             
             if is_bus:
                 # Digital buses: Plot ONLY ONCE using the active layout file
-                target_pairs = pairs_b if name in pairs_b else pairs_a
-                target_df = df_b if name in pairs_b else df_a
+                target_pairs = pairs_a if name in pairs_a else pairs_b
+                target_df = df_a if name in pairs_a else df_b
                 
                 x_col, y_col, _ = target_pairs[name]
                 data_bus = target_df[[x_col, y_col]].dropna()
@@ -2036,7 +2077,7 @@ class CadencePlotter:
                     data_a = df_a[[x_col, y_col]].dropna()
                     x_val = pd.to_numeric(data_a[x_col], errors='coerce').values
                     y_val = pd.to_numeric(data_a[y_col], errors='coerce').values
-                    ax.plot(x_val, y_val, color=curve_color, linestyle='--', linewidth=2, label='Pre')
+                    ax.plot(x_val, y_val, color=curve_color, linestyle='--', linewidth=2, label=r'$\mathrm{Pre}$')
                     y_data_points.extend(y_val)
                     
 
@@ -2045,7 +2086,7 @@ class CadencePlotter:
                     data_b = df_b[[x_col, y_col]].dropna()
                     x_val = pd.to_numeric(data_b[x_col], errors='coerce').values
                     y_val = pd.to_numeric(data_b[y_col], errors='coerce').values
-                    ax.plot(x_val, y_val, color=curve_color, linestyle='-', linewidth=2, label='Post')
+                    ax.plot(x_val, y_val, color=curve_color, linestyle='-', linewidth=2, label=r'\mathrm{Post}')
                     y_data_points.extend(y_val)
 
                 # Set custom vertical scales and ticks
@@ -2056,13 +2097,13 @@ class CadencePlotter:
                         ax.set_yticks(np.linspace(ymin, ymax, 3))
                 elif "V_cap" in name:
                         max_y = np.nanmax(y_data_points) if len(y_data_points) > 0 else 0
-                        ymin, ymax = (500, 700) if max_y > 10 else (0.7, 1.5)
+                        ymin, ymax = (500, 700) if max_y > 10 else (0.7, 1.3)
                         ax.set_ylim(ymin, ymax)
-                        ax.set_yticks(np.linspace(0, ymax, 3))
+                        ax.set_yticks(np.linspace(ymin, ymax, 3))
 
-                elif "V_ramp" in name:
+                elif "V_ramp_f" in name:
                         max_y = np.nanmax(y_data_points) if len(y_data_points) > 0 else 0
-                        ymin, ymax = (500, 700) if max_y > 10 else (-0.1, 1.2) #(-0.1, 1.5)
+                        ymin, ymax = (500, 700) if max_y > 10 else (-0.1, 1.3) #(-0.1, 1.5)
                         ax.set_ylim(ymin, ymax)
                         ax.set_yticks(np.linspace(0, 1.1, 3))
                 else:
@@ -2079,7 +2120,7 @@ class CadencePlotter:
             if subplots:
                 if "_" in name:
                     base, subscript = name.split("_", 1)
-                    latex_name = f"${base}_{{{{\\text{{{subscript}}}}}}}$"
+                    latex_name = f"${base}_{{{{\\mathrm{{{subscript}}}}}}}$"
                 else:
                     latex_name = name
                 ax.set_ylabel(latex_name, rotation=0, labelpad=40, va='center', fontweight='bold')
@@ -2089,18 +2130,16 @@ class CadencePlotter:
             if idx == 0 and not is_bus:
                 ax.legend(
                     loc='upper right', 
-                    fontsize=12, 
+                    fontsize=10, 
                     framealpha=1.0, 
-                    edgecolor='black', 
-                    facecolor='white',
-                    labelcolor='black'
 )
 
         if subplots:
-            axes[-1].set_xlabel("Time (s)")
+            axes[-1].set_xlabel(r"$\mathrm{Time (s)}$")
         else:
-            axes[0].set_xlabel("Time (s)")
+            axes[0].set_xlabel(r"$\mathrm{Time (s)}$")
 
+        plt.xlim(1.705e-6, 1.795e-6)
         out_path = self.plot_dir / "signals_comparison_plot.pdf"
         plt.savefig(out_path, dpi=300)
         print(f"Saved compared signal layout plots to: {out_path}")
@@ -2545,6 +2584,10 @@ class CadencePlotter:
             ),
             "pvt_sweep": lambda: self.plot_pvt_sweep(filename, subfigure=kwargs.get("subfigure", False), VDD=kwargs.get("vdd", False)),
             "pvt_linearity": lambda: self.plot_pvt_linearity(filename, subplots=kwargs.get("subplots", False)),
+            "cap_calibration": lambda: self.plot_inl_per_code(filename, num_codes=kwargs.get("num_codes", 32)),
+            "dynamic_range_variable": lambda: self.plot_dynamic_range_vs_variable(file_a = kwargs.get("file_a"),
+                file_b = kwargs.get("file_b"), num_codes=kwargs.get("num_codes", 32)),
+            "characteristic": lambda: self.plot_current_characteristics(file_a = kwargs.get("file_a"), file_b = kwargs.get("file_b"), num_codes=kwargs.get("num_codes", 32)),
         }
 
         if plot_type not in dispatch:
@@ -2687,20 +2730,313 @@ class CadencePlotter:
         
         return out_path
     
-    def plot_peak_linearity_errors(self, file_a=None, file_b=None, num_codes=32, **kwargs):
+    def plot_inl_per_code(self, filename, num_codes=32, **kwargs):
         """
-        Plots the peak absolute values of DNL and INL on two separated line plots.
-        X-axis shows ordered Process and Temperature configurations (e.g., SS, -55).
-        Lines change color based on Vdd and connect the points together.
-        Relies on parent frame configurations for figure sizes, labels, and legends.
+        Calculates and plots the Integral Non-Linearity (INL) in LSB units 
+        versus the digital codes using native internal figure generators 
+        and clean binary legend labels.
+        """
+        df, _ = self.load_data(filename)
+        if df is None:
+            print("Error: Could not read source target file data.")
+            return
+
+        columns = df.columns
+
+        print(columns)
+        
+        # 1. Use your native plotting infrastructure helper
+        fig, ax = self._create_figure()
+
+        curve_count = 0
+        # Scan columns in pairs (X data column, Y data column)
+        for i in range(0, len(columns), 2):
+            if i + 1 < len(columns):
+                col_name = columns[i+1]
+                
+                # Extract delay metrics matching required code bounds
+                y_val = pd.to_numeric(df[col_name], errors='coerce').dropna().values[:num_codes]
+                if len(y_val) < 2:
+                    continue
+                
+                # Calculate reference LSB code-weight for this curve parameters step
+                lsb = (y_val[-1] - y_val[0]) / (len(y_val) - 1)
+                
+                if lsb != 0:
+                    # Establish reference linear fit profile tracing endpoints
+                    ideal_line = np.linspace(y_val[0], y_val[-1], len(y_val))
+                    # Compute native INL errors in LSB units
+                    inl_steps = (y_val - ideal_line) / lsb
+                    
+                    # 2. Clean up Cadence header labels into neat binary sequences (e.g., "0111")
+                    # Looks for expressions matching c0=0, c1=1 etc.
+                    matches = re.findall(r'c\d+=([01])', col_name)
+                    if matches:
+                        # Reverse matches because Cadence counts c0, c1, c2, c3 (LSB to MSB)
+                        # Reversing them makes the final label read as standard MSB -> LSB
+                        label_clean = "".join(reversed(matches))
+                    else:
+                        label_clean = col_name.replace('delay (', '').replace(')', '').replace(' Y', '')
+                    
+                    codes_x = np.arange(len(y_val))
+                    ax.plot(codes_x, inl_steps, linewidth=1.5, label=label_clean)
+                    curve_count += 1
+
+        ax.set_xlabel(r"$\mathrm{Digital~Code}$")
+        ax.set_ylabel(r"$\mathrm{INL}~(\mathrm{LSB})$")
+        maybe_title(ax, "Integral Non-Linearity (INL) Profile Sweep")
+        ax.grid(True, linestyle='--', alpha=0.35)
+        
+        # Show clean legend map if it doesn't overlap/crowd out elements
+        if curve_count <= 8:
+            ax.legend(loc='upper right', fontsize=8)
+            
+        plt.tight_layout()
+        
+        out_name = self.plot_dir / f"inl_by_code_{Path(filename).stem}.pdf"
+        plt.savefig(out_name, dpi=300)
+        plt.close()
+        
+        print(f"SUCCESS: Generated INL code plot profile at:\n  -> {out_name}")      
+
+    def plot_dynamic_range_vs_variable(self, file_a=None, file_b=None, num_codes=32, **kwargs):
+        """
+        Plots the Dynamic Tuning Range (Delta t_max in ns) vs a toggled parameter
+        extracted from column headers. Connects points with a dashed line for Pre-Layout (file_a)
+        and a solid line for Post-Layout (file_b). All entries are strictly ordered ascending.
+        """
+        df_a, _ = self.load_data(file_a) if file_a else (None, None)
+        df_b, _ = self.load_data(file_b) if file_b else (None, None)
+        df_target = df_b if df_b is not None else df_a
+       
+        
+        if df_target is None:
+            print("Error: No valid data available for tracking dynamic range.")
+            return
+
+        columns = df_target.columns
+        detected_var_name = "Variable Step"
+        
+        # Internal helper to sweep columns and extract conditions and values
+        def parse_variable_metrics(df):
+            points = {} # condition_label -> dynamic_range_ns
+            if df is None:
+                return points
+                
+            nonlocal detected_var_name
+            for i in range(0, len(df.columns), 2):
+                if i + 1 < len(df.columns):
+                    col_name = df.columns[i+1]
+                    y_val = pd.to_numeric(df[col_name], errors='coerce').dropna().values[:num_codes]
+                    if len(y_val) < 2:
+                        continue
+                        
+                    # Calculate dynamic range delta_t in ns
+                    dyn_range_ns = (np.max(y_val) - np.min(y_val)) * 1e9
+                    
+                    # Scenario A: Named sweep variable like Vbp=0.55
+                    match_var = re.search(r'([\w\d\_]+)=([^,\s\)]+)', col_name)
+                    # Scenario B: Multi-bit strings like b0=0,b1=0... -> convert to binary string
+                    match_bits = re.findall(r'[bBcC]\d+=([01])', col_name)
+                    
+                    if match_bits:
+                        detected_var_name = r"Calibration Code"
+                        cond_label = "".join(reversed(match_bits))
+                    elif match_var:
+                        detected_var_name = match_var.group(1)
+                        cond_label = match_var.group(2)
+                    else:
+                        cond_label = col_name.replace('delay (', '').replace(')', '').replace(' Y', '')
+                        
+                    points[cond_label] = dyn_range_ns
+            return points
+
+        metrics_a = parse_variable_metrics(df_a)
+        metrics_b = parse_variable_metrics(df_b)
+        
+        # Gather all unique labels found in datasets
+        unique_labels = list(set(list(metrics_a.keys()) + list(metrics_b.keys())))
+
+        # Smart sorting function to order labels numerically (whether binary word or decimal)
+        def true_numeric_sort_key(label_str):
+            try:
+                # If it's a binary string like '0010', parse base-2 integer value
+                if all(c in '01' for c in label_str) and len(label_str) > 1:
+                    return int(label_str, 2)
+                # Try standard floating point parsing
+                return float(label_str)
+            except ValueError:
+                # Fallback alphabetical sorting if alphanumeric characters are present
+                return label_str
+
+        all_labels = sorted(unique_labels, key=true_numeric_sort_key)
+        x_indices = np.arange(len(all_labels))
+
+        # Build figure using your custom internal architecture function exclusively
+        fig, ax = self._create_figure()
+            
+        # Plot Pre-Layout if available
+        if metrics_a:
+            y_pts_a = [metrics_a[lbl] if lbl in metrics_a else np.nan for lbl in all_labels]
+            ax.plot(x_indices, y_pts_a, color=plt.cm.tab10(0), linestyle='--', marker='o')
+            
+        # Plot Post-Layout if available
+        if metrics_b:
+            y_pts_b = [metrics_b[lbl] if lbl in metrics_b else np.nan for lbl in all_labels]
+            ax.plot(x_indices, y_pts_b, color=plt.cm.tab10(1), linestyle='-', marker='o')
+
+        # Formatting axis ticks and labels in standard pure text notation
+        ax.set_xticks(x_indices[::2])
+        ax.set_xticklabels(all_labels[::2], rotation=25, ha='right', fontsize=12)
+        ax.set_xlabel(r"$\mathrm{Calibration \, Code}$", fontsize=12, fontweight='bold')
+        ax.set_ylabel(r" $\Delta t~[\mathrm{ns}]$", fontsize=12, fontweight='bold')
+        ax.grid(True, linestyle='--', alpha=0.35)
+        
+        # Add layout tracking legend blocks
+        from matplotlib.lines import Line2D
+        style_handles = []
+        if metrics_b:
+            style_handles.append(Line2D([0], [0], color=plt.cm.tab10(1), linestyle='-', label=r'$\mathrm{Post}$'))
+        if metrics_a:
+            style_handles.append(Line2D([0], [0], color=plt.cm.tab10(0), linestyle='--', label=r'$\mathrm{Pre}$'))
+        ax.legend(handles=style_handles, loc='best', fontsize = 12)
+
+        plt.tight_layout()
+        
+        # Save output named directly after the checked variable run
+        out_name = self.plot_dir / f"dynamic_range_vs_{detected_var_name.lower().replace(' ', '_')}.pdf"
+        plt.savefig(out_name, dpi=300)
+        plt.close()
+        
+        print(f"SUCCESS: Exported variable range tuning plot to:\n  -> {out_name}")
+
+    def plot_current_characteristics(self, file_a=None, file_b=None, num_codes=32, **kwargs):
+        """
+        Plots a continuous line where the X-axis is the full 4-bit word (b3b2b1b0).
+        It plots all values for b3=0 first, followed by all values for b3=1.
+        Pre-Layout (file_a) uses a dashed line, Post-Layout (file_b) uses a solid line.
         """
         df_a, _ = self.load_data(file_a) if file_a else (None, None)
         df_b, _ = self.load_data(file_b) if file_b else (None, None)
         df_target = df_b if df_b is not None else df_a
         
         if df_target is None:
+            print("Error: No valid data available for plotting characteristics.")
+            return
+
+        # Helper to convert sweep labels to absolute integers/floats for accurate sorting
+        def get_numeric_sort_key(label_str):
+            try:
+                if all(c in '01' for c in label_str) and len(label_str) > 1:
+                    return int(label_str, 2)
+                return float(label_str)
+            except ValueError:
+                return label_str
+
+        # Helper to extract a dictionary of: full_4bit_word -> y_value
+        def extract_4bit_points(df):
+            points_map = {}  # "b3b2b1b0" -> scalar_y_value (in ns)
+            if df is None:
+                return points_map
+
+            columns = df.columns
+            for i in range(0, len(columns), 2):
+                if i + 1 < len(columns):
+                    col_x = columns[i]
+                    col_y = columns[i+1]
+                    
+                    # Read the arrays
+                    x_vals = pd.to_numeric(df[col_x], errors='coerce').dropna().values[:num_codes]
+                    y_vals = pd.to_numeric(df[col_y], errors='coerce').dropna().values[:num_codes]
+                    
+                    if len(x_vals) < 1 or len(y_vals) < 1:
+                        continue
+                    
+                    # Extract header bits (b2, b1, b0)
+                    match_bits = re.findall(r'[bBcC]\d+=([01])', col_y)
+                    if match_bits:
+                        # Reverse matches to get standard MSB -> LSB string for b2b1b0
+                        sub_word = "".join(reversed(match_bits))
+                    else:
+                        # Fallback parsing if string matches a different format
+                        sub_word = col_y.replace('delay (', '').replace(')', '').replace(' Y', '')
+
+                    # Rebuild the full 4-bit word combining the row coordinate (b3) and the sub_word
+                    for xi, yi in zip(x_vals, y_vals):
+                        b3_bit = str(int(xi))
+                        full_word = f"{b3_bit}{sub_word}"
+                        points_map[full_word] = yi * 1e6  # Convert to ns
+            return points_map
+
+        data_a = extract_4bit_points(df_a)
+        data_b = extract_4bit_points(df_b)
+
+        # Generate a list of all unique 4-bit words present across both datasets
+        all_words = list(set(list(data_a.keys()) + list(data_b.keys())))
+        
+        # Sort them strictly in numerical ascending order (0000 up to 1111)
+        # This guarantees b3=0 comes first, followed by b3=1 natively
+        all_words = sorted(all_words, key=get_numeric_sort_key)
+        x_indices = np.arange(len(all_words))
+
+        # Generate the figure layout using your custom internal helper function
+        fig, ax = self._create_figure()
+
+        # Reconstruct the continuous curve arrays following the X-axis sort order
+        if data_a:
+            y_sequence_a = [data_a[word] if word in data_a else np.nan for word in all_words]
+            ax.plot(x_indices, y_sequence_a, color=plt.cm.tab10(0), linestyle='--', marker='o', markersize=4, alpha=0.7)
+
+        if data_b:
+            y_sequence_b = [data_b[word] if word in data_b else np.nan for word in all_words]
+            ax.plot(x_indices, y_sequence_b, color=plt.cm.tab10(1), linestyle='-', marker='o', markersize=4)
+
+        # Set labels and configure custom tick step skips if needed
+        ax.set_xticks(x_indices[::2])
+        ax.set_xticklabels(all_words[::2], rotation=45, ha='right')
+        
+        ax.set_xlabel(r"$\mathrm{Calibration}$ $\mathrm{Code}$")
+        ax.set_ylabel(r"$I_{\mathrm{ch}}$ ($\mu A$)")
+        
+        base_name = Path(file_b).stem if file_b else Path(file_a).stem
+        maybe_title(ax, f"Complete 4-Bit Code Characteristics Sweep")
+        ax.grid(True, linestyle='--', alpha=0.35)
+
+        # Build clean custom line type handles for the layout legend
+        from matplotlib.lines import Line2D
+        style_handles = []
+        if file_b:
+            style_handles.append(Line2D([0], [0], color=plt.cm.tab10(1), linestyle='-', label=r'$\mathrm{Post}$'))
+        if file_a:
+            style_handles.append(Line2D([0], [0], color=plt.cm.tab10(0), linestyle='--', alpha=0.7, label=r'$\mathrm{Pre}$'))
+            
+        ax.legend(handles=style_handles, loc='best', fontsize = 8)
+
+        plt.tight_layout()
+        
+        out_name = self.plot_dir / f"continuous_4bit_characteristics_{base_name}.pdf"
+        plt.savefig(out_name, dpi=300)
+        plt.close()
+        
+        print(f"SUCCESS: Generated continuous 4-bit sweep characteristic plot at:\n  -> {out_name}")
+
+
+    def plot_peak_linearity_errors(self, file_a=None, file_b=None, num_codes=32, **kwargs):
+        """
+        Plots the peak absolute values of DNL and INL, along with the Dynamic Tuning Range
+        on three separated line plots using the proper LaTeX text family settings.
+        X-axis shows ordered Process and Temperature configurations (e.g., SS, -55).
+        """
+        df_a, _ = self.load_data(file_a) if file_a else (None, None)
+        df_b, _ = self.load_data(file_b) if file_b else (None, None)
+        df_target = df_b if df_b is not None else df_a
+        print(f"Loaded data for dynamic range plot: Pre-Layout: {file_a,df_a}, Post-Layout: {file_b,df_b}")
+        if df_target is None:
             print("Error: No valid data available.")
             return
+        
+
+            
 
         def parse_header(col_name):
             clean = col_name.replace('delay (modelFiles=toplevel.scs:', '').replace(') Y', '').strip()
@@ -2727,11 +3063,13 @@ class CadencePlotter:
                 found_procs.add(proc)
                 found_temps.add(temp)
 
-                def get_peaks(df):
+                def get_metrics(df):
                     if df is not None and columns[i+1] in df.columns:
                         y_val = pd.to_numeric(df[columns[i+1]], errors='coerce').dropna().values[:num_codes]
                         if len(y_val) >= 2:
                             lsb = (y_val[-1] - y_val[0]) / (len(y_val) - 1)
+                            dyn_range = (np.max(y_val) - np.min(y_val)) * 1e9  # Convert to ns
+                            
                             if lsb != 0:
                                 raw_steps = np.diff(y_val)
                                 dnl_steps = (raw_steps / lsb) - 1.0
@@ -2741,26 +3079,24 @@ class CadencePlotter:
                                 inl_steps = (y_val - ideal_line) / lsb
                                 peak_inl = np.max(np.abs(inl_steps))
                                 
-                                return peak_dnl, peak_inl
+                                return peak_dnl, peak_inl, dyn_range
                     return None
 
-                peaks_a = get_peaks(df_a)
-                if peaks_a:
+                metrics_a = get_metrics(df_a)
+                if metrics_a:
                     if vdd not in data_points_a: data_points_a[vdd] = {}
-                    data_points_a[vdd][cond_key] = peaks_a
+                    data_points_a[vdd][cond_key] = metrics_a
 
-                peaks_b = get_peaks(df_b)
-                if peaks_b:
+                metrics_b = get_metrics(df_b)
+                if metrics_b:
                     if vdd not in data_points_b: data_points_b[vdd] = {}
-                    data_points_b[vdd][cond_key] = peaks_b
+                    data_points_b[vdd][cond_key] = metrics_b
 
         sorted_procs = sorted(list(found_procs))
         
         def temp_sort_key(t_str):
-            try:
-                return float(t_str)
-            except ValueError:
-                return 999.0
+            try: return float(t_str)
+            except ValueError: return 999.0
         sorted_temps = sorted(list(found_temps), key=temp_sort_key)
 
         all_conditions = []
@@ -2775,14 +3111,13 @@ class CadencePlotter:
 
         from matplotlib.lines import Line2D
         style_handles = [
-            Line2D([0], [0], color='black', linestyle='-', label='Post-Layout'),
-            Line2D([0], [0], color='black', linestyle='--', alpha=0.5, label='Pre-Layout')
+            Line2D([0], [0], color='black', linestyle='-', label=r'$\mathrm{Post}$'),
+            Line2D([0], [0], color='black', linestyle='--', alpha=0.5, label=r'$\mathrm{Pre}$')
         ]
 
-        # --- Figure 1: Separated Peak DNL Trend ---
-        # Requesting a slightly expanded widescreen layout from your figure generator
-        fig1, ax1 = plt.subplots(figsize=(10, 6))
-        
+        # --- FIGURE 1: PEAK DNL TREND ---
+        fig1, ax1 = plt.subplots(figsize=(8, 4))
+
         for vdd, cond_dict in data_points_a.items():
             color = vdd_colors.get(vdd, 'black')
             y_pts = [cond_dict[c][0] if c in cond_dict else np.nan for c in all_conditions]
@@ -2791,31 +3126,25 @@ class CadencePlotter:
         for vdd, cond_dict in data_points_b.items():
             color = vdd_colors.get(vdd, 'black')
             y_pts = [cond_dict[c][0] if c in cond_dict else np.nan for c in all_conditions]
-            ax1.plot(x_indices, y_pts, color=color, linestyle='-', marker='o', label=rf'$Vdd={vdd}$ V')
+            ax1.plot(x_indices, y_pts, color=color, linestyle='-', marker='o', label=rf'$V_{{\mathrm{{DD}}}}={vdd}$ $\mathrm{{V}}$')
 
         ax1.set_xticks(x_indices)
         ax1.set_xticklabels(all_conditions, rotation=35, ha='right')
-        
-       
-        ax1.set_xlabel("PVT Operating Corners")
-        ax1.set_ylabel("Peak |$DNL$| (LSB)")
-            
-        if hasattr(self, '_apply_grid_styling'):
-            self._apply_grid_styling(ax1, alpha=0.35)
-        else:
-            ax1.grid(True, linestyle='--', alpha=0.4)
-        
-        current_handles, current_labels = ax1.get_legend_handles_labels()
+        ax1.set_xlabel(r"$\mathrm{PVT}~\mathrm{Operating}~\mathrm{Corners}$")
+        ax1.set_ylabel(r"$\mathrm{Peak}~|\mathrm{DNL}|~(\mathrm{LSB})$")
+        maybe_title(ax1, "Peak DNL Variation Trends")
+        ax1.grid(True, linestyle='--', alpha=0.35)
+        current_handles, _ = ax1.get_legend_handles_labels()
         ax1.legend(handles=current_handles + style_handles, loc='best')
-        
         plt.tight_layout()
         out_dnl = self.plot_dir / "peak_dnl_trends_comparison.pdf"
         plt.savefig(out_dnl, dpi=300)
-        plt.show()
+        plt.close()
 
-        # --- Figure 2: Separated Peak INL Trend ---
-        fig2, ax2 = plt.subplots(figsize=(10, 6))
-        
+        # --- FIGURE 2: PEAK INL TREND ---
+        fig2, ax2 = plt.subplots(figsize=(8, 4))
+
+
         for vdd, cond_dict in data_points_a.items():
             color = vdd_colors.get(vdd, 'black')
             y_pts = [cond_dict[c][1] if c in cond_dict else np.nan for c in all_conditions]
@@ -2824,31 +3153,49 @@ class CadencePlotter:
         for vdd, cond_dict in data_points_b.items():
             color = vdd_colors.get(vdd, 'black')
             y_pts = [cond_dict[c][1] if c in cond_dict else np.nan for c in all_conditions]
-            ax2.plot(x_indices, y_pts, color=color, linestyle='-', marker='s', label=rf'$Vdd={vdd}$ V')
+            ax2.plot(x_indices, y_pts, color=color, linestyle='-', marker='s', label=rf'$V_{{\mathrm{{DD}}}}={vdd}$ $\mathrm{{V}}$')
 
         ax2.set_xticks(x_indices)
         ax2.set_xticklabels(all_conditions, rotation=35, ha='right')
-        
-        if hasattr(self, '_format_plot_labels'):
-            self._format_plot_labels(ax2, xlabel="PVT Operating Corners", ylabel="Peak |$INL$| (LSB)", title="Peak INL Variation Trends")
-        else:
-            ax2.set_xlabel("PVT Operating Corners")
-            ax2.set_ylabel("Peak |$INL$| (LSB)")
-            
-        if hasattr(self, '_apply_grid_styling'):
-            self._apply_grid_styling(ax2, alpha=0.35)
-        else:
-            ax2.grid(True, linestyle='--', alpha=0.4)
-            
-        current_handles2, current_labels2 = ax2.get_legend_handles_labels()
-        ax2.legend( handles=current_handles + style_handles,loc='best')
-        
+        ax2.set_xlabel(r"$\mathrm{PVT}~\mathrm{Operating}~\mathrm{Corners}$")
+        ax2.set_ylabel(r"$\mathrm{Peak}~|\mathrm{INL}|~(\mathrm{LSB})$")
+        maybe_title(ax2, "Peak INL Variation Trends")
+        ax2.grid(True, linestyle='--', alpha=0.35)
+        current_handles2, _ = ax2.get_legend_handles_labels()
+        ax2.legend(handles=current_handles2 + style_handles, loc='best')
         plt.tight_layout()
         out_inl = self.plot_dir / "peak_inl_trends_comparison.pdf"
         plt.savefig(out_inl, dpi=300)
-        plt.show()
-        
-        print(f"Saved trend charts to:\n  - {out_dnl}\n  - {out_inl}")
+        plt.close()
+
+        # --- FIGURE 3: DYNAMIC TUNING RANGE TREND ---
+        fig3, ax3 = plt.subplots(figsize=(8, 4))
+     
+
+        for vdd, cond_dict in data_points_a.items():
+            color = vdd_colors.get(vdd, 'black')
+            y_pts = [cond_dict[c][2] if c in cond_dict else np.nan for c in all_conditions]
+            ax3.plot(x_indices, y_pts, color=color, linestyle='--', marker='^', alpha=0.4)
+
+        for vdd, cond_dict in data_points_b.items():
+            color = vdd_colors.get(vdd, 'black')
+            y_pts = [cond_dict[c][2] if c in cond_dict else np.nan for c in all_conditions]
+            ax3.plot(x_indices, y_pts, color=color, linestyle='-', marker='^', label=rf'$V_{{\mathrm{{DD}}}}={vdd}$ $\mathrm{{V}}$')
+
+        ax3.set_xticks(x_indices)
+        ax3.set_xticklabels(all_conditions, rotation=35, ha='right')
+        ax3.set_xlabel(r"$\mathrm{PVT}~\mathrm{Operating}~\mathrm{Corners}$")
+        ax3.set_ylabel(r"$\Delta t~[\mathrm{{ns}}]$")
+        maybe_title(ax3, "DTC Dynamic Tuning Range Scaling Across Corners")
+        ax3.grid(True, linestyle='--', alpha=0.35)
+        current_handles3, _ = ax3.get_legend_handles_labels()
+        ax3.legend(handles=current_handles3 + style_handles, loc='best')
+        plt.tight_layout()
+        out_range = self.plot_dir / "dynamic_range_trends_comparison.pdf"
+        plt.savefig(out_range, dpi=300)
+        plt.close()
+            
+        print(f"Saved trend charts to:\n  - {out_dnl}\n  - {out_inl}\n  - {out_range}")
 
     def plot_pvt_linearity_grid(self, file_a=None, file_b=None, num_codes=32, **kwargs):
         """
@@ -2931,12 +3278,12 @@ class CadencePlotter:
         legend_elements = [
             Line2D([0], [0], color='black', linestyle='-', label='Post-Layout (Bold)'),
             Line2D([0], [0], color='black', linestyle='--', alpha=0.5, label='Pre-Layout (Thin)'),
-            Line2D([0], [0], marker='s', color='none', markerfacecolor=plt.cm.tab10(0), label='$V_{\\text{dd}}=0.88\\text{ V}$'),
-            Line2D([0], [0], marker='s', color='none', markerfacecolor=plt.cm.tab10(1), label='$V_{\\text{dd}}=1.1\\text{ V}$'),
-            Line2D([0], [0], marker='s', color='none', markerfacecolor=plt.cm.tab10(2), label='$V_{\\text{dd}}=1.32\\text{ V}$'),
-            Line2D([0], [0], color='black', linestyle=':', label='$T=-55^\\circ\\text{C}$'),
-            Line2D([0], [0], color='black', linestyle='--', label='$T=27^\\circ\\text{C}$'),
-            Line2D([0], [0], color='black', linestyle='-', label='$T=125^\\circ\\text{C}$')
+            Line2D([0], [0], marker='s', color='none', markerfacecolor=plt.cm.tab10(0), label=r'$V_{\text{dd}}=0.88 \text{ V}$'),
+            Line2D([0], [0], marker='s', color='none', markerfacecolor=plt.cm.tab10(1), label=r'$V_{\text{dd}}=1.1 \text{ V}$'),
+            Line2D([0], [0], marker='s', color='none', markerfacecolor=plt.cm.tab10(2), label=r'$V_{\text{dd}}=1.32 \text{ V}$'),
+            Line2D([0], [0], color='black', linestyle=':', label=r'$T=-55^\circ\text{C}$'),
+            Line2D([0], [0], color='black', linestyle='--', label=r'$T=27^\circ\text{C}$'),
+            Line2D([0], [0], color='black', linestyle='-', label=r'$T=125^\circ\text{C}$')
         ]
         fig.legend(handles=legend_elements, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=4, fontsize=10, edgecolor='black')
         
@@ -2944,9 +3291,7 @@ class CadencePlotter:
         plt.savefig(out_path, dpi=300, bbox_inches='tight')
         print(f"Saved complete grid comparison layout to: {out_path}")
         plt.show()
-# ============================================================================
-# PLOT CONFIGURATION & EXECUTION
-# ============================================================================
+           
 
 def define_plot_tasks():
     """Define all plotting tasks in a structured format."""

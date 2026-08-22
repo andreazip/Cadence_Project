@@ -675,18 +675,18 @@ class CoarseFineDTC:
             coarse_marker = coarse_marker[keep]
 
         fig, ax = plt.subplots()
-        ax.plot(codes, delays_ns, color='#D62728', linewidth=2.6)
+        ax.plot(codes, delays_ns, color=plt.cm.tab10(0), linewidth=2)
         
         maybe_title(ax, 'Coarse-Fine Delay Characteristic vs Combined Code', fontweight='bold', pad=12)
-        ax.set_xlabel('Code', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Delay [ns]', fontsize=12, fontweight='bold')
+        ax.set_xlabel(r'$\mathrm{Code}$', fontweight='bold')
+        ax.set_ylabel(r'$\mathrm{Delay} [\mathrm{ns}]$', fontweight='bold')
         if t_range_ns is not None:
             ax.set_ylim(0, 6)
         else:
             ax.set_ylim(0, 6)
         ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
         ax.set_axisbelow(True)
-        ax.legend(fontsize=10, framealpha=0.96, edgecolor='black', loc='best')
+        # ax.legend(fontsize=10, loc='best')
         plt.tight_layout()
 
         if save_path:
@@ -714,17 +714,17 @@ class CoarseFineDTC:
         ax.plot(
             codes,
             powers_uw,
-            color='#1F77B4',
-            linewidth=2.6,
+            color=plt.cm.tab10(1),
+            linewidth=2,
         )
         maybe_title(ax, 'Coarse-Fine Total Power vs Combined Code', fontsize=14, fontweight='bold', pad=12)
-        ax.set_xlabel('Code', fontsize=12, fontweight='bold')
-        ax.set_ylabel(r'$P_{tot} [\mu W]$', fontsize=12, fontweight='bold')
+        ax.set_xlabel(r'$\mathrm{Code}$', fontweight='bold')
+        ax.set_ylabel(r'$P_\mathrm{tot}$ $[\mathrm{\mu W}]$', fontweight='bold')
         if len(codes) > 0:
             ax.set_xlim(0, int(codes[-1]))
         ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
         ax.set_axisbelow(True)
-        ax.legend(fontsize=10, framealpha=0.96, edgecolor='black', loc='best')
+        # ax.legend(fontsize=10, loc='best')
         plt.tight_layout()
 
         if save_path:
@@ -901,11 +901,11 @@ class CoarseFineDTC:
             codes_inl = active_codes
 
             alpha_value = 0.15 + (mc / max(mc_runs - 1, 1)) * 0.5
-            ax1.plot(codes_dnl, dnl_ps, linewidth=1.6, alpha=alpha_value, color='#D62728')
-            ax2.plot(codes_inl, inl_ps, linewidth=1.6, alpha=alpha_value, color='#1F77B4')
+            ax1.plot(codes_dnl, dnl_ps, linewidth=1.6, alpha=alpha_value, color=plt.cm.tab10(0))
+            ax2.plot(codes_inl, inl_ps, linewidth=1.6, alpha=alpha_value, color=plt.cm.tab10(1))
 
         ax1.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
-        ax1.set_ylabel('DNL Error [ps]', fontsize=12, fontweight='bold')
+        ax1.set_ylabel(r'$\mathrm{DNL}~\mathrm{ps}]$', fontweight='bold')
         maybe_suptitle(ax1,
             f'Coarse DTC Monte Carlo Non-Linearity ({mc_runs} runs, Error in ps)',
             fontsize=14,
@@ -916,8 +916,8 @@ class CoarseFineDTC:
         ax1.set_axisbelow(True)
 
         ax2.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
-        ax2.set_ylabel('INL Error [ps]', fontsize=12, fontweight='bold')
-        ax2.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
+        ax2.set_ylabel(r'$\mathrm{INL}~\mathrm{ps}]$', fontweight='bold')
+        ax2.set_xlabel(r'$\mathrm{Digital~Code}$', fontweight='bold')
         ax2.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
         ax2.set_axisbelow(True)
 
@@ -1143,32 +1143,33 @@ def run_mc_mismatch_analysis(
         codes_inl = codes
 
         alpha_value = 0.15 + (mc / max(mc_runs - 1, 1)) * 0.5
-        ax_dnl.plot(codes_dnl, dnl, alpha=alpha_value, linewidth=1.6, color='#D62728')
-        ax_inl.plot(codes_inl, inl, alpha=alpha_value, linewidth=1.6, color='#1F77B4')
+        ax_dnl.plot(codes_dnl, dnl, alpha=alpha_value, linewidth=1.6, color=plt.cm.tab10(0))
+        ax_inl.plot(codes_inl, inl, alpha=alpha_value, linewidth=1.6, color=plt.cm.tab10(1))
 
-    ax_dnl.set_ylabel("DNL (LSB)", fontsize=12, fontweight='bold')
+    ax_dnl.set_ylabel(r'$\mathrm{DNL}~\mathrm{(LSB)}$', fontweight='bold')
+    ax_dnl.set_xlabel(r'$\mathrm{Code}$', fontweight='bold')
     maybe_title(ax_dnl,
         f"Coarse-Fine Monte Carlo DNL ({mc_runs} Realizations, LSB = {lsb_last:.2e})",
         fontsize=14,
         fontweight='bold',
         pad=12,
     )
-    ax_dnl.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
+    # ax_dnl.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
     ax_dnl.axhline(y=dnl_limit_lsb, color='black', linestyle='--', linewidth=1.0, alpha=0.5)
     ax_dnl.axhline(y=-dnl_limit_lsb, color='black', linestyle='--', linewidth=1.0, alpha=0.4)
     ax_dnl.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax_dnl.set_axisbelow(True)
-    ax_dnl.legend(fontsize=10, framealpha=0.96, edgecolor='black', loc='best')
+    # ax_dnl.legend(fontsize=10, framealpha=0.96, edgecolor='black', loc='best')
 
-    ax_inl.set_ylabel("INL (LSB)", fontsize=12, fontweight='bold')
-    ax_inl.set_xlabel("Combined Code", fontsize=12, fontweight='bold')
+    ax_inl.set_ylabel(r'$\mathrm{INL}~\mathrm{(LSB)}$', fontweight='bold')
+    ax_inl.set_xlabel(r'$\mathrm{Code}$', fontweight='bold')
     maybe_title(ax_inl,
         f"Coarse-Fine Monte Carlo INL ({mc_runs} Realizations, LSB = {lsb_last:.2e})",
         fontsize=14,
         fontweight='bold',
         pad=12,
     )
-    ax_inl.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
+    # ax_inl.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
     ax_inl.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax_inl.set_axisbelow(True)
 

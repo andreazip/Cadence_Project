@@ -136,9 +136,9 @@ class ConstantSlopeDTC:
 
     def energy_msb_1(self, ca, c_k, c0, Vst, self_power_down):
         if self_power_down:
-            return (ca - c_k) / (c0 + ca+self.cramp) * (c0 + c_k+self.cramp) * self.vdd**2 + self.cramp/2*(self.vdd**2/2+ Vst*(Vst-self.vdd))#1/2 *self.cramp * self.vdd**2/4 + self.cramp/2 * (Vst**2 - (self.vdd/2)**2)
+            return (ca - c_k) / (c0 + ca+self.cramp) * (c0 + c_k + self.cramp) * self.vdd**2 + self.cramp/2*(self.vdd**2/2+ Vst*(Vst-self.vdd))#1/2 *self.cramp * self.vdd**2/4 + self.cramp/2 * (Vst**2 - (self.vdd/2)**2)
         else:
-            return (ca - c_k) / (c0 + ca + self.cramp) * (c0 + c_k+self.cramp) * self.vdd**2  + self.cramp/2 * (self.vdd**2+ Vst**2)
+            return (ca - c_k) / (c0 + ca + self.cramp) * (c0 + c_k + self.cramp) * self.vdd**2  + self.cramp/2 * (self.vdd**2+ Vst**2)
 
     def compute_vst_energy(self, cap_array, c0, cramp):
         ca = np.sum(cap_array)
@@ -458,26 +458,26 @@ def compute_dnl_inl(delay_s):
 def plot_delay_power(codes, delay_s, power_w, out_dir, name_prefix):
     fig_delay = plt.figure()
     ax = fig_delay.add_subplot(111)
-    ax.plot(codes, delay_s * 1e9, color='#D62728', linewidth=2.6, label='Delay')
-    maybe_title(ax,f'{name_prefix} Delay vs Digital Code', fontsize=14, fontweight='bold', pad=12)
-    ax.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
-    ax.set_ylabel('Delay [ns]', fontsize=12, fontweight='bold')
+    ax.plot(codes, delay_s * 1e9, color=plt.cm.tab10(0), linewidth=2, label='Delay')
+    maybe_title(ax,f'{name_prefix} Delay vs Digital Code',  fontweight='bold', pad=12)
+    ax.set_xlabel(r'$\mathrm{Digital} \; \mathrm{Code}$',  fontweight='bold')
+    ax.set_ylabel(r'$\mathrm{Delay} \; [\mathrm{ns}]$', fontweight='bold')
     ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax.set_axisbelow(True)
-    ax.legend(fontsize=10, framealpha=0.96, edgecolor='black')
-    save_figure_to(fig_delay, f'{name_prefix.lower().replace(" ", "_")}_delay_vs_code.png', out_dir)
+    #ax.legend( framealpha=0.96)
+    save_figure_to(fig_delay, f'{name_prefix.lower().replace(" ", "_")}_delay_vs_code.pdf', out_dir)
     plt.close(fig_delay)
 
     fig_power = plt.figure()
     ax = fig_power.add_subplot(111)
-    ax.plot(codes, power_w * 1e6, color='#1F77B4', linewidth=2.6, label='Power')
-    maybe_title(ax,f'{name_prefix} Power vs Digital Code', fontsize=14, fontweight='bold', pad=12)
-    ax.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
-    ax.set_ylabel(r'Power [$\mu W$]', fontsize=12, fontweight='bold')
+    ax.plot(codes, power_w * 1e6, color=plt.cm.tab10(1), linewidth=2, label='Power')
+    maybe_title(ax,f'{name_prefix} Power vs Digital Code',  fontweight='bold', pad=12)
+    ax.set_xlabel(r'$\mathrm{Digital} \; \mathrm{Code}$',  fontweight='bold')
+    ax.set_ylabel(r'$\mathrm{Power} \; [\mu W]$', fontweight='bold')
     ax.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax.set_axisbelow(True)
-    ax.legend(fontsize=10, framealpha=0.96, edgecolor='black')
-    save_figure_to(fig_power, f'{name_prefix.lower().replace(" ", "_")}_power_vs_code.png', out_dir)
+    #ax.legend(fontsize=10, framealpha=0.96, edgecolor='black')
+    save_figure_to(fig_power, f'{name_prefix.lower().replace(" ", "_")}_power_vs_code.pdf', out_dir)
     plt.close(fig_power)
 
 
@@ -490,47 +490,47 @@ def plot_mc_dnl_inl(mc_delay_list, out_dir, name_prefix, n_runs):
         dnl, inl, _ = compute_dnl_inl(delay_s)
         x = np.arange(1, len(delay_s))
         alpha_value = 0.15 + (idx / max(len(mc_delay_list) - 1, 1)) * 0.45
-        ax1.plot(x, dnl, color='#D62728', linewidth=1.5, alpha=alpha_value)
-        ax2.plot(x, inl, color='#1F77B4', linewidth=1.5, alpha=alpha_value)
-        ax_dnl.plot(x, dnl, color='#D62728', linewidth=1.5, alpha=alpha_value)
-        ax_inl.plot(x, inl, color='#1F77B4', linewidth=1.5, alpha=alpha_value)
+        ax1.plot(x, dnl, color=plt.cm.tab10(0), linewidth=1.5, alpha=alpha_value)
+        ax2.plot(x, inl, color=plt.cm.tab10(1), linewidth=1.5, alpha=alpha_value)
+        ax_dnl.plot(x, dnl, color=plt.cm.tab10(0), linewidth=1.5, alpha=alpha_value)
+        ax_inl.plot(x, inl, color=plt.cm.tab10(1), linewidth=1.5, alpha=alpha_value)
 
     ax1.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
-    ax1.set_ylabel('DNL (LSB)', fontsize=12, fontweight='bold')
+    ax1.set_ylabel(r'$\mathrm{DNL} \; [\mathrm{LSB}]$', fontweight='bold')
     maybe_suptitle(ax1, f'{name_prefix} Monte Carlo DNL/INL ({n_runs} realizations)', fontsize=14, fontweight='bold', pad=12)
     ax1.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax1.set_axisbelow(True)
 
     ax2.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
-    ax2.set_ylabel('INL (LSB)', fontsize=12, fontweight='bold')
-    ax2.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
+    ax2.set_ylabel(r'$\mathrm{INL} \; [\mathrm{LSB}]$', fontweight='bold')
+    ax2.set_xlabel(r'$\mathrm{Digital} \; \mathrm{Code}$',  fontweight='bold')
     ax2.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax2.set_axisbelow(True)
 
     ax_dnl.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
-    ax_dnl.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
-    ax_dnl.set_ylabel('DNL (LSB)', fontsize=12, fontweight='bold')
+    ax_dnl.set_xlabel(r'$\mathrm{Digital} \; \mathrm{Code}$',  fontweight='bold')
+    ax_dnl.set_ylabel(r'$\mathrm{DNL} \; [\mathrm{LSB}]$', fontweight='bold')
     maybe_title(ax_dnl, f'{name_prefix} Monte Carlo DNL ({n_runs} realizations)', fontsize=14, fontweight='bold', pad=12)
     ax_dnl.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax_dnl.set_axisbelow(True)
 
     ax_inl.axhline(y=0, color='black', linestyle='-', linewidth=1.0, alpha=0.5)
-    ax_inl.set_xlabel('Digital Code', fontsize=12, fontweight='bold')
-    ax_inl.set_ylabel('INL (LSB)', fontsize=12, fontweight='bold')
+    ax_inl.set_xlabel(r'$\mathrm{Digital} \; \mathrm{Code}$',  fontweight='bold')
+    ax_inl.set_ylabel(r'$\mathrm{INL} \; [\mathrm{LSB}]$', fontweight='bold')
     maybe_title(ax_inl, f'{name_prefix} Monte Carlo INL ({n_runs} realizations)', fontsize=14, fontweight='bold', pad=12)
     ax_inl.grid(True, linestyle='--', alpha=0.6, linewidth=1.2, color="#b7b7b7")
     ax_inl.set_axisbelow(True)
 
     plt.tight_layout()
-    save_figure_to(fig, f'{name_prefix.lower().replace(" ", "_")}_mc_dnl_inl_{n_runs}runs.png', out_dir)
+    save_figure_to(fig, f'{name_prefix.lower().replace(" ", "_")}_mc_dnl_inl_{n_runs}runs.pdf', out_dir)
     plt.close(fig)
 
     fig_dnl.tight_layout()
-    save_figure_to(fig_dnl, f'{name_prefix.lower().replace(" ", "_")}_mc_dnl_{n_runs}runs.png', out_dir)
+    save_figure_to(fig_dnl, f'{name_prefix.lower().replace(" ", "_")}_mc_dnl_{n_runs}runs.pdf', out_dir)
     plt.close(fig_dnl)
 
     fig_inl.tight_layout()
-    save_figure_to(fig_inl, f'{name_prefix.lower().replace(" ", "_")}_mc_inl_{n_runs}runs.png', out_dir)
+    save_figure_to(fig_inl, f'{name_prefix.lower().replace(" ", "_")}_mc_inl_{n_runs}runs.pdf', out_dir)
     plt.close(fig_inl)
 
 

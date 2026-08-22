@@ -8,7 +8,7 @@ from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 
 
 HAS_SCIENCEPLOTS = False
-SCIENCE_STYLE = ["science", "std-colors", "no-latex"]
+SCIENCE_STYLE = ["science", "std-colors"]
 SCIENCE_STYLE_OVERRIDES = {
     "text.usetex": True,
     "figure.figsize": (3.3, 2.5),

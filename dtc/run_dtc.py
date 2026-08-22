@@ -30,11 +30,11 @@ CONFIG = {
         "Non-linearities-capacitor": False,
     },
     "n_bits": 12,
-    "cu": 0.2e-15,
+    "cu": 1e-15,
     "dac_mode": "binary",  # baseline mode for delay/power/summaries
     "segmented_thermo_bits": 4,
     "ac_nm": 5.6e-3,
-    "area_um2": 2, #1.62, #0.89
+    "area_um2": 1, #1.62, #0.89
     "vdd": 1.1,
     "vth": 0.55,
     # Apply directly to Vdd and Vth in runner.
@@ -52,10 +52,10 @@ CONFIG = {
     "c2": -0.09,
     "i1": 0.184,
     "c0_factor": 1.0,  # used when c0_factors is not provided
-    "c0_factors": [1],
+    "c0_factors": [0.5, 0.75, 1 , 1.25, 1.5],  # Sweep over these C0 factors
     "mc_runs": 100,
     "mc_modes": ["binary", "segmented"],
-    "C_fixed" : 120e-15, # Fixed capacitance added to each DAC code (e.g. from routing or intentional cap)
+    "C_fixed" : 100e-15, # Fixed capacitance added to each DAC code (e.g. from routing or intentional cap)
 }
 
 
@@ -299,18 +299,18 @@ def main():
 
         print(f"All requested plots saved to:\n- {constant_save_path}\n- {variable_save_path}")
 
-    fig, ax_cs = plt.subplots(figsize=_multi_panel_figsize(1, 1))
+    fig, ax_cs = plt.subplots(figsize=(5, 3))
 
-    for item in power_sweep_cs:
-        ax_cs.plot(item["codes"], item["power"] * 1e6, lw=2, label=f"C0 x{item['c0_factor']:g}")
+    for i, item in enumerate(power_sweep_cs):
+        ax_cs.plot(item["codes"], item["power"] * 1e6, lw=2, label=rf"$\mathrm{{C0}} \times {item['c0_factor']:g}$", color = plt.cm.tab10(i))
     maybe_suptitle(ax_cs, "Constant Slope Power vs Code (C0 Sweep)")
-    ax_cs.set_xlabel("Digital Code")
-    ax_cs.set_ylabel(r"Power ($\mu$W)")
+    ax_cs.set_xlabel(r"$\mathrm{Digital} \; \mathrm{Code}$")
+    ax_cs.set_ylabel(r"$\mathrm{Power} \; (\mu\mathrm{W})$")
     ax_cs.grid(True, alpha=0.3)
-    ax_cs.legend(frameon=False)
+    ax_cs.legend(frameon=False, loc='lower right', fontsize=10)
 
     fig.tight_layout()
-    combined_power_path = save_path / "power_constant_slope_c0_sweep.png"
+    combined_power_path = save_path / "power_constant_slope_c0_sweep.pdf"
     fig.savefig(combined_power_path, dpi=300)
     plt.close(fig)
 
