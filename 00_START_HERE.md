@@ -1,3 +1,14 @@
+# Conda environment
+
+Create or update the project environment from the project root:
+
+```bash
+conda env update --file environment.yml --prune
+conda activate cadence-project
+```
+
+To select it in VS Code, choose the Python interpreter named `cadence-project`.
+
 # 🎉 CadencePlotter - Complete Refactoring & Polish Summary
 
 ## 🎯 Mission Accomplished
