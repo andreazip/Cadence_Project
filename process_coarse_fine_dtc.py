@@ -13,7 +13,7 @@ apply_science_style()
 
 
 SAVE_DIR = Path(
-    r"C:\Users\zipar\OneDrive - Delft University of Technology\Second Year\MEP\python simulation\coarse_fine_processed"
+    "/Users/andreaziparo/Library/CloudStorage/OneDrive-DelftUniversityofTechnology/Results_cadence/coarse_fine_processed"
 )
 
 
@@ -34,9 +34,19 @@ def split_into_coarse_blocks(y: np.ndarray, coarse_codes: int, fine_codes: int) 
     Expected lengths:
     - coarse_codes * fine_codes
     - coarse_codes * fine_codes - 2 (first and last block have one fewer sample)
+    - coarse_codes * fine_codes + 1 (trailing fencepost sample from an inclusive
+      Cadence `sample(...)` sweep range; the extra trailing sample is dropped)
     """
     total_expected = coarse_codes * fine_codes
     n = len(y)
+
+    if n == total_expected + 1:
+        print(
+            f"Info: Got {n} points for a {coarse_codes}x{fine_codes} grid "
+            f"(expected {total_expected}); dropping the trailing fencepost sample."
+        )
+        y = y[:-1]
+        n = total_expected
 
     if n == total_expected:
         sizes = [fine_codes] * coarse_codes
@@ -139,8 +149,9 @@ def combine_like_coarse_fine_dtc(
     fine_codes: int,
     max_boundary_skip: int = -1,
     remove_coarse: bool = False,
-    remove_fine: bool = False,  
-    slope_negative: bool = False
+    remove_fine: bool = False,
+    slope_negative: bool = False,
+    lsb_override: float | None = None,
 ):
     """
     New requested policy:
@@ -148,6 +159,11 @@ def combine_like_coarse_fine_dtc(
         - Each next coarse segment: start from the first point < previous - 0.5*LSB_local.
         - Each next point must be >= previous - 0.45*LSB_local, otherwise skip more until this is satisfied.
       LSB_local is the average fine step magnitude in that coarse segment.
+
+    If `lsb_override` is given, it is used directly as the boundary-matching LSB instead of
+    the rough per-block estimate below (used for the two-pass calibration in
+    run_standard_pipeline: pass 1 stitches with the approximate LSB, then pass 2 re-stitches
+    using the LSB computed from pass 1's actual linearized characteristic).
     """
     coarse_active = codes_without_middle(coarse_codes) if remove_coarse == True else codes_with_middle(coarse_codes)
     fine_idx_last = codes_without_middle(fine_codes) if remove_fine == True else codes_with_middle(fine_codes)
@@ -185,9 +201,14 @@ def combine_like_coarse_fine_dtc(
         if len(local_values) > 1:
             local_lsb.append((local_values[-1] - local_values[0])/(len(local_values)-1))
         else:
-            local_lsb = 0.0
+            local_lsb.append(0.0)
         
-    lsb = np.abs(float(np.mean(np.array(local_lsb))))
+    if lsb_override is not None:
+        lsb = float(lsb_override)
+        print(f"Using overridden LSB: {lsb:.6e}")
+    else:
+        lsb = float(np.median(np.abs(np.array(local_lsb))))
+        print(f"Average local LSB across coarse segments: {lsb:.6e}")
 
     #configure the first fine block
     block = blocks[int(coarse_active[0])]
@@ -218,9 +239,8 @@ def combine_like_coarse_fine_dtc(
                     else:
                         margin = local_values - p
                     
-                    candidate = np.where((margin >= 0.6 * lsb) & (margin <= 1.4 * lsb))[0]
-
-                    if len(candidate) > 0 and len(candidate_local) == 0 and candidate[0] > 3:
+                    candidate = np.where((margin >= 0.5 * lsb) & (margin <= 1.5 * lsb))[0]
+                    if len(candidate) > 0 and len(candidate_local) == 0 and candidate[0] > 1:
                             prev_value = p
                             end_previous = i
                             candidate_local = candidate
@@ -282,8 +302,7 @@ def combine_like_coarse_fine_dtc(
                     "violates_after": bool(violates_after),
                 }
             )
-
-        coarse_base = float(np.min(block))
+        
         for local_i, f_code in enumerate(previous_idx):
 
             value = float(block_prev[int(f_code)]) # Raw measurement
@@ -319,7 +338,9 @@ def combine_like_coarse_fine_dtc(
         "max_boundary_skip": int(max_boundary_skip),
         "boundary_details": boundary_details,
         "remove_coarse": bool(remove_coarse),
-        "remove_fine": bool(remove_fine),   
+        "remove_fine": bool(remove_fine),
+        "lsb_used": float(lsb),
+        "lsb_was_overridden": lsb_override is not None,
     }
 
     return (
@@ -422,7 +443,7 @@ def compute_average_power_per_period(
     return avg_power
 
 
-def plot_selected_average_power(avg_power_w: np.ndarray, out_dir: Path, P_static: float) -> Path:
+def plot_selected_average_power(avg_power_w: np.ndarray, out_dir: Path, P_static: float, suffix: str = "") -> Path:
     """Plot average power across selected linearized coarse-fine codes."""
     if len(avg_power_w) > 1:
         # Remove the first plotted point to suppress the initial jump artifact.
@@ -438,7 +459,8 @@ def plot_selected_average_power(avg_power_w: np.ndarray, out_dir: Path, P_static
     ax.set_ylabel(r"$P_{\mathrm{tot}} [\mu W]$")
     ax.grid(True, alpha=0.35)
 
-    out = out_dir / "processed_avg_power_selected_like_coarse_fine_dtc.pdf"
+    tag = f"_{suffix}" if suffix else ""
+    out = out_dir / f"processed_avg_power_selected_like_coarse_fine_dtc{tag}.pdf"
     fig.savefig(out, dpi=300)
     plt.close(fig)
     return out
@@ -603,18 +625,20 @@ def plot_coarse_fine_synthesis(self, coarse_file, fine_file, num_total_codes=819
         print("="*70 + "\n")
 
 
-def plot_results(delay: np.ndarray, coarse_marker: np.ndarray, dnl: np.ndarray, inl: np.ndarray, out_dir: Path):
+def plot_results(delay: np.ndarray, coarse_marker: np.ndarray, dnl: np.ndarray, inl: np.ndarray, out_dir: Path, suffix: str = "", label: str = ""):
     """Save delay characteristic and DNL/INL plots."""
     x = np.arange(len(delay))
+    tag = f"_{suffix}" if suffix else ""
+    title_suffix = f" ({label})" if label else ""
 
     fig1, ax1 = plt.subplots(constrained_layout=True)
     ax1.plot(x, delay*1e9, linewidth=2, label=r"$t_{\mathrm{delay}}$")
-    maybe_suptitle(ax1, "Delay Characteristic (Processed Like coarse_fine_dtc)")
-    
+    maybe_suptitle(ax1, f"Delay Characteristic (Processed Like coarse_fine_dtc){title_suffix}")
+
     ax1.set_ylabel(r"$t_{\mathrm{delay}}~[\mathrm{ns}]$", fontsize=15, fontweight='bold')
     ax1.set_xlabel(r" $\mathrm{Code}$", fontsize=12, fontweight='bold')
     ax1.grid(True, alpha=0.3)
-    p1 = out_dir / "processed_delay_characteristic_like_coarse_fine_dtc.pdf"
+    p1 = out_dir / f"processed_delay_characteristic_like_coarse_fine_dtc{tag}.pdf"
     fig1.savefig(p1, dpi=300)
     plt.close(fig1)
 
@@ -622,32 +646,239 @@ def plot_results(delay: np.ndarray, coarse_marker: np.ndarray, dnl: np.ndarray, 
     ax2.plot(x, dnl, linewidth=1.4)
     ax2.axhline(0.5, linestyle="--", linewidth=1.0)
     ax2.axhline(-0.5, linestyle="--", linewidth=1.0)
-    maybe_suptitle(ax2, "DNL (Processed Like coarse_fine_dtc)")
+    maybe_suptitle(ax2, f"DNL (Processed Like coarse_fine_dtc){title_suffix}")
     ax2.set_ylabel(r"$\mathrm{DNL} [\mathrm{LSB}]$", fontsize=12, fontweight='bold')
     ax2.grid(True, alpha=0.3)
 
     fig3, ax3 = plt.subplots()
     ax3.plot(x, inl, linewidth=1.4)
     ax3.axhline(0.0, linestyle="--", linewidth=1.0)
-    maybe_suptitle(ax3, "INL (Processed Like coarse_fine_dtc)")
+    maybe_suptitle(ax3, f"INL (Processed Like coarse_fine_dtc){title_suffix}")
     ax3.set_xlabel(r"$\mathrm{Combined}$ $\mathrm{Code}$", fontsize=12, fontweight='bold')
     ax3.set_ylabel(r"$\mathrm{INL} [\mathrm{LSB}]$", fontsize=12, fontweight='bold')
     ax3.grid(True, alpha=0.3)
 
-    p2 = out_dir / "processed_dnl_like_coarse_fine_dtc.pdf"
+    p2 = out_dir / f"processed_dnl_like_coarse_fine_dtc{tag}.pdf"
     fig2.savefig(p2, dpi=300)
     plt.close(fig2)
 
-    p3 = out_dir / "processedinl_like_coarse_fine_dtc.pdf"
+    p3 = out_dir / f"processedinl_like_coarse_fine_dtc{tag}.pdf"
     fig3.savefig(p3, dpi=300)
     plt.close(fig3)
 
     return p1, p2, p3
 
+
+def plot_source_comparison(results: dict[str, dict], out_dir: Path) -> None:
+    """Overlay the delay/DNL/INL characteristics from multiple processed sources."""
+    labels = list(results.keys())
+    if len(labels) < 2:
+        return
+
+    colors = [plt.cm.tab10(0), plt.cm.tab10(1), plt.cm.tab10(2), plt.cm.tab10(3)]
+    linestyles = ['--', '-', '-.', ':']
+
+    with plt.rc_context(SCIENCE_STYLE_OVERRIDES):
+        fig, ax = plt.subplots(constrained_layout=True)
+        for i, label in enumerate(labels):
+            delay = results[label]["delay"]
+            ax.plot(np.arange(len(delay)), delay * 1e9,
+                    color=colors[i % len(colors)], linestyle=linestyles[i % len(linestyles)],
+                    linewidth=2, label=label)
+        maybe_suptitle(ax, "Delay Characteristic Comparison")
+        ax.set_xlabel(r"$\mathrm{Code}$", fontsize=12, fontweight='bold')
+        ax.set_ylabel(r"$t_{\mathrm{delay}}~[\mathrm{ns}]$", fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='best')
+        fig.savefig(out_dir / "comparison_delay_characteristic.pdf", dpi=300)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(constrained_layout=True)
+        for i, label in enumerate(labels):
+            dnl = results[label]["dnl"]
+            ax.plot(np.arange(len(dnl)), dnl,
+                    color=colors[i % len(colors)], linestyle=linestyles[i % len(linestyles)],
+                    linewidth=1.4, label=label)
+        ax.axhline(0.5, linestyle=":", linewidth=1.0, color="gray")
+        ax.axhline(-0.5, linestyle=":", linewidth=1.0, color="gray")
+        maybe_suptitle(ax, "DNL Comparison")
+        ax.set_xlabel(r"$\mathrm{Code}$", fontsize=12, fontweight='bold')
+        ax.set_ylabel(r"$\mathrm{DNL}~[\mathrm{LSB}]$", fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='best')
+        fig.savefig(out_dir / "comparison_dnl.pdf", dpi=300)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(constrained_layout=True)
+        for i, label in enumerate(labels):
+            inl = results[label]["inl"]
+            ax.plot(np.arange(len(inl)), inl,
+                    color=colors[i % len(colors)], linestyle=linestyles[i % len(linestyles)],
+                    linewidth=1.4, label=label)
+        ax.axhline(0.0, linestyle=":", linewidth=1.0, color="gray")
+        maybe_suptitle(ax, "INL Comparison")
+        ax.set_xlabel(r"$\mathrm{Code}$", fontsize=12, fontweight='bold')
+        ax.set_ylabel(r"$\mathrm{INL}~[\mathrm{LSB}]$", fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='best')
+        fig.savefig(out_dir / "comparison_inl.pdf", dpi=300)
+        plt.close(fig)
+
+        fig, ax = plt.subplots(constrained_layout=True)
+        for i, label in enumerate(labels):
+            avg_power_uw = results[label].get("avg_power_uw")
+            if avg_power_uw is None or len(avg_power_uw) == 0:
+                continue
+            # Drop the first point to match plot_selected_average_power's jump-artifact suppression.
+            power_plot = avg_power_uw[1:] if len(avg_power_uw) > 1 else avg_power_uw
+            ax.plot(np.arange(len(power_plot)), power_plot,
+                    color=colors[i % len(colors)], linestyle=linestyles[i % len(linestyles)],
+                    linewidth=1.8, label=label)
+        maybe_suptitle(ax, "Average Power Comparison")
+        ax.set_xlabel(r"$\mathrm{Code}$", fontsize=12, fontweight='bold')
+        ax.set_ylabel(r"$P_{\mathrm{tot}}~[\mu W]$", fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='best')
+        fig.savefig(out_dir / "comparison_avg_power.pdf", dpi=300)
+        plt.close(fig)
+
+    print(f"Saved comparison plots (delay/DNL/INL/power) for {', '.join(labels)} to: {out_dir}")
+
+
+def run_standard_pipeline(
+    y: np.ndarray,
+    args,
+    out_dir: Path,
+    has_power_files: bool,
+    df_p_coarse=None,
+    df_p_fine=None,
+    suffix: str = "",
+    label: str = "",
+    coarse_codes: int | None = None,
+    fine_codes: int | None = None,
+) -> dict:
+    """Run the coarse/fine linearization + DNL/INL + power pipeline for one source dataset."""
+    coarse_codes = args.coarse_codes if coarse_codes is None else coarse_codes
+    fine_codes = args.fine_codes if fine_codes is None else fine_codes
+
+    blocks = split_into_coarse_blocks(y, coarse_codes=coarse_codes, fine_codes=fine_codes)
+
+    # Pass 1: stitch with the rough per-block LSB estimate to get a first-cut characteristic.
+    delay_approx, _, _, _, _, info_approx = combine_like_coarse_fine_dtc(
+        blocks, coarse_codes=coarse_codes, fine_codes=fine_codes,
+        max_boundary_skip=args.max_boundary_skip, remove_coarse=args.remove_coarse,
+        remove_fine=args.remove_fine, slope_negative=args.slope_negative,
+    )
+    _, _, lsb_refined = compute_dnl_inl(delay_approx)
+    tag_print = f"[{label}] " if label else ""
+    print(f"{tag_print}Pass 1 approx LSB: {info_approx['lsb_used']:.6e} -> Pass 2 refined LSB: {lsb_refined:.6e}")
+
+    if not np.isfinite(lsb_refined) or lsb_refined == 0.0:
+        print(f"{tag_print}Warning: pass 1 produced a degenerate LSB; falling back to the approximate LSB for pass 2.")
+        lsb_refined = info_approx["lsb_used"]
+
+    # Pass 2: re-stitch from scratch using the LSB computed from pass 1's actual characteristic.
+    delay, coarse_marker, coarse_codes_out, fine_codes_out, selected_input_indices, info = combine_like_coarse_fine_dtc(
+        blocks, coarse_codes=coarse_codes, fine_codes=fine_codes,
+        max_boundary_skip=args.max_boundary_skip, remove_coarse=args.remove_coarse,
+        remove_fine=args.remove_fine, slope_negative=args.slope_negative,
+        lsb_override=lsb_refined,
+    )
+    info["lsb_pass1_approx"] = info_approx["lsb_used"]
+    info["lsb_pass2_refined"] = float(lsb_refined)
+
+    dnl, inl, lsb = compute_dnl_inl(delay)
+    print(f"\n{tag_print}Processed {len(delay)} codes. Peak |DNL|: {float(np.max(np.abs(dnl))):.4f}, Peak |INL|: {float(np.max(np.abs(inl))):.4f}, LSB: {lsb*1e12:.4f} ps")
+
+    with plt.rc_context(SCIENCE_STYLE_OVERRIDES):
+        plot_results(delay, coarse_marker, dnl, inl, out_dir, suffix=suffix, label=label)
+
+    tag = f"_{suffix}" if suffix else ""
+    combined_path = out_dir / f"processed_combined_delay_like_coarse_fine_dtc{tag}.json"
+    info_path = out_dir / f"processed_info_like_coarse_fine_dtc{tag}.json"
+    coarse_counts_json_path = out_dir / f"processed_coarse_code_counts_like_coarse_fine_dtc{tag}.json"
+    coarse_counts_csv_path = out_dir / f"processed_coarse_code_counts_like_coarse_fine_dtc{tag}.csv"
+    avg_power_csv_path = out_dir / f"processed_avg_power_selected_like_coarse_fine_dtc{tag}.csv"
+
+    unique_coarse, coarse_counts = np.unique(coarse_codes_out, return_counts=True)
+    coarse_count_map = {int(c): int(n) for c, n in zip(unique_coarse, coarse_counts)}
+
+    with combined_path.open("w", encoding="utf-8") as f: json.dump(delay.tolist(), f, indent=2)
+    with info_path.open("w", encoding="utf-8") as f: json.dump({"policy": info, "n_input_points": len(y)}, f, indent=2)
+    with coarse_counts_json_path.open("w", encoding="utf-8") as f: json.dump({"coarse_code_counts": coarse_count_map}, f, indent=2)
+    pd.DataFrame({"coarse_code": unique_coarse.astype(int), "n_codes": coarse_counts.astype(int)}).to_csv(coarse_counts_csv_path, index=False)
+
+    if has_power_files:
+        print(f"\n{tag_print}Synthesizing total processed average power matching active selection codes...")
+        p_c_vals = pd.to_numeric(df_p_coarse.iloc[:, 1], errors='coerce').dropna().values[:coarse_codes]
+        p_f_vals = pd.to_numeric(df_p_fine.iloc[:, 1], errors='coerce').dropna().values[:fine_codes]
+
+        target_fine_len_p = 8192 // len(p_c_vals)
+        xp_p = np.linspace(0, 1, len(p_f_vals))
+        x_new_p = np.linspace(0, 1, target_fine_len_p)
+        p_f_resampled = np.interp(x_new_p, xp_p, p_f_vals)
+
+        power_list = []
+        for c_hw, f_hw in zip(coarse_codes_out, fine_codes_out):
+            c_idx = int(c_hw) if int(c_hw) < len(p_c_vals) else -1
+            f_idx = int(f_hw) if int(f_hw) < len(p_f_resampled) else -1
+            power_list.append(p_c_vals[c_idx] + p_f_resampled[f_idx])
+
+        avg_power_selected = np.array(power_list) * 1e-6
+        valid_selected = np.arange(len(delay), dtype=int)
+        selected_coarse_codes = coarse_codes_out
+        selected_fine_codes = fine_codes_out
+    else:
+        power_csv_list = [Path(p) for p in args.power_csvs]
+        if len(power_csv_list) > 0:
+            avg_power_all = compute_average_power_per_period(
+                power_csv_list=power_csv_list, n_periods=len(y),
+                period_s=float(args.period_s), start_time_s=args.power_start_time
+            )
+            valid_selected = selected_input_indices[(selected_input_indices >= 0) & (selected_input_indices < len(avg_power_all))]
+            avg_power_selected = avg_power_all[valid_selected]
+            selected_coarse_codes = coarse_codes_out[: len(valid_selected)].astype(int)
+            selected_fine_codes = fine_codes_out[: len(valid_selected)].astype(int)
+
+            (selected_coarse_codes, selected_fine_codes, valid_selected, avg_power_selected) = filter_power_codes_for_plot(
+                coarse_codes=selected_coarse_codes, fine_codes=selected_fine_codes,
+                source_period_index=valid_selected.astype(int), avg_power_w=avg_power_selected,
+            )
+        else:
+            avg_power_selected = np.zeros(len(delay))
+            valid_selected = np.arange(len(delay))
+            selected_coarse_codes = coarse_codes_out
+            selected_fine_codes = fine_codes_out
+
+    linear_code = np.arange(len(avg_power_selected), dtype=int)
+    pd.DataFrame({
+        "linearized_code": linear_code,
+        "source_period_index": valid_selected.astype(int),
+        "coarse_code": selected_coarse_codes,
+        "fine_code": selected_fine_codes,
+        "avg_power_w": avg_power_selected,
+        "avg_power_uw": avg_power_selected * 1e6,
+    }).to_csv(avg_power_csv_path, index=False)
+
+    with plt.rc_context(SCIENCE_STYLE_OVERRIDES):
+        plot_selected_average_power(avg_power_selected, out_dir, P_static=args.static_power_uw * 1e-6, suffix=suffix)
+
+    print(f"{tag_print}Single evaluation complete. Peak |DNL|: {float(np.max(np.abs(dnl))):.4f}")
+
+    return {"delay": delay, "dnl": dnl, "inl": inl, "lsb": lsb, "avg_power_uw": avg_power_selected * 1e6}
+
     
 def build_cli_parser():
     parser = argparse.ArgumentParser(description="Process CSV exactly like coarse_fine_dtc indexing/policy.")
-    parser.add_argument("--csv", default="results_cadence/delay_coarse_fine.csv")
+    parser.add_argument(
+        "--csv", default=None,
+        help=(
+            "Directly-captured coarse+fine CSV. If neither --coarse_file/--fine_file nor "
+            "--csv is given, defaults to results_cadence/delay_coarse_fine.csv. If given "
+            "together with --coarse_file/--fine_file, both sources are processed "
+            "independently and a comparison plot is produced."
+        ),
+    )
     parser.add_argument(
         "--power-csvs",
         nargs="+",
@@ -655,8 +886,19 @@ def build_cli_parser():
         help="Ordered power transient CSVs; traces are processed sequentially in this order.",
     )
     parser.add_argument("--out-dir", default=str(SAVE_DIR))
-    parser.add_argument("--coarse-codes", type=int, default=256)
+    parser.add_argument(
+        "--coarse-codes", type=int, default=256,
+        help="Grid size for the --coarse_file/--fine_file synthesis path (must multiply with --fine-codes to 8192).",
+    )
     parser.add_argument("--fine-codes", type=int, default=32)
+    parser.add_argument(
+        "--csv-coarse-codes", type=int, default=None,
+        help="Coarse grid size for the direct --csv source, if different from --coarse-codes.",
+    )
+    parser.add_argument(
+        "--csv-fine-codes", type=int, default=None,
+        help="Fine grid size for the direct --csv source, if different from --fine-codes.",
+    )
     parser.add_argument("--period-s", type=float, default=20e-9)
     parser.add_argument("--power-start-time", type=float, default=None)
     parser.add_argument(
@@ -990,8 +1232,15 @@ def main():
     # STANDARD SINGLE-TRACE PROCESSING BRANCH FALLBACK
     # =========================================================================
     else:
-        print("\n[STANDARD MODE] Processing singular evaluation trajectory file dataset...")
-        if args.coarse_file and args.fine_file:
+        has_two_file_source = bool(args.coarse_file and args.fine_file)
+        csv_path = args.csv or (None if has_two_file_source else "results_cadence/delay_coarse_fine.csv")
+        has_csv_source = bool(csv_path)
+        both_sources = has_two_file_source and has_csv_source
+
+        results = {}
+
+        if has_two_file_source:
+            print("\n[STANDARD MODE] Processing coarse+fine synthesized dataset...")
             c_y = pd.to_numeric(df_coarse.iloc[:, 1], errors='coerce').dropna().values
             f_y = pd.to_numeric(df_fine.iloc[:, 1], errors='coerce').dropna().values
 
@@ -1004,101 +1253,38 @@ def main():
             total_delay = []
             for c_val in c_y:
                 for f_val in f_y_resampled: total_delay.append(c_val + f_val)
-            y = np.array(total_delay)[:num_total_codes]
-        else:
-            df = pd.read_csv(args.csv)
+            y_synth = np.array(total_delay)[:num_total_codes]
+
+            coarse_fine_dir = out_dir / "coarse_fine"
+            coarse_fine_dir.mkdir(parents=True, exist_ok=True)
+            results["Combined"] = run_standard_pipeline(
+                y_synth, args, coarse_fine_dir, has_power_files,
+                df_p_coarse=df_p_coarse if has_power_files else None,
+                df_p_fine=df_p_fine if has_power_files else None,
+                label="Combined",
+            )
+
+        if has_csv_source:
+            print("\n[STANDARD MODE] Processing direct CSV dataset...")
+            df = pd.read_csv(csv_path)
             df.columns = [c.strip() for c in df.columns]
-            y = pd.to_numeric(df[df.columns[1]], errors="coerce").dropna().to_numpy(dtype=float)
+            y_csv = pd.to_numeric(df[df.columns[1]], errors="coerce").dropna().to_numpy(dtype=float)
 
-        blocks = split_into_coarse_blocks(y, coarse_codes=args.coarse_codes, fine_codes=args.fine_codes)
-        delay, coarse_marker, coarse_codes_out, fine_codes_out, selected_input_indices, info = combine_like_coarse_fine_dtc(
-            blocks, coarse_codes=args.coarse_codes, fine_codes=args.fine_codes,
-            max_boundary_skip=args.max_boundary_skip, remove_coarse=args.remove_coarse,
-            remove_fine=args.remove_fine, slope_negative=args.slope_negative,
-        )
+            single_file_dir = out_dir / "single_file"
+            single_file_dir.mkdir(parents=True, exist_ok=True)
+            results["Single"] = run_standard_pipeline(
+                y_csv, args, single_file_dir, has_power_files,
+                df_p_coarse=df_p_coarse if has_power_files else None,
+                df_p_fine=df_p_fine if has_power_files else None,
+                label="Single",
+                coarse_codes=args.csv_coarse_codes if args.csv_coarse_codes is not None else args.coarse_codes,
+                fine_codes=args.csv_fine_codes if args.csv_fine_codes is not None else args.fine_codes,
+            )
 
-        dnl, inl, lsb = compute_dnl_inl(delay)
-        
-        with plt.rc_context(SCIENCE_STYLE_OVERRIDES):
-            delay_plot, dnl_plot, inl_plot = plot_results(delay, coarse_marker, dnl, inl, out_dir)
-
-        combined_path = out_dir / "processed_combined_delay_like_coarse_fine_dtc.json"
-        info_path = out_dir / "processed_info_like_coarse_fine_dtc.json"
-        coarse_counts_json_path = out_dir / "processed_coarse_code_counts_like_coarse_fine_dtc.json"
-        coarse_counts_csv_path = out_dir / "processed_coarse_code_counts_like_coarse_fine_dtc.csv"
-        avg_power_csv_path = out_dir / "processed_avg_power_selected_like_coarse_fine_dtc.csv"
-
-        unique_coarse, coarse_counts = np.unique(coarse_codes_out, return_counts=True)
-        coarse_count_map = {int(c): int(n) for c, n in zip(unique_coarse, coarse_counts)}
-        first_fine_per_coarse = {}
-        last_fine_per_coarse = {}
-        for c, f in zip(coarse_codes_out, fine_codes_out):
-            c_i = int(c)
-            f_i = int(f)
-            if c_i not in first_fine_per_coarse: first_fine_per_coarse[c_i] = f_i
-            last_fine_per_coarse[c_i] = f_i
-
-        with combined_path.open("w", encoding="utf-8") as f: json.dump(delay.tolist(), f, indent=2)
-        with info_path.open("w", encoding="utf-8") as f: json.dump({"policy": info, "n_input_points": len(y)}, f, indent=2)
-        with coarse_counts_json_path.open("w", encoding="utf-8") as f: json.dump({"coarse_code_counts": coarse_count_map}, f, indent=2)
-        pd.DataFrame({"coarse_code": unique_coarse.astype(int), "n_codes": coarse_counts.astype(int)}).to_csv(coarse_counts_csv_path, index=False)
-
-        if has_power_files:
-            print("\nSynthesizing total processed average power matching active selection codes...")
-            p_c_vals = pd.to_numeric(df_p_coarse.iloc[:, 1], errors='coerce').dropna().values[:args.coarse_codes]
-            p_f_vals = pd.to_numeric(df_p_fine.iloc[:, 1], errors='coerce').dropna().values[:args.fine_codes]
-
-            target_fine_len_p = 8192 // len(p_c_vals)
-            xp_p = np.linspace(0, 1, len(p_f_vals))
-            x_new_p = np.linspace(0, 1, target_fine_len_p)
-            p_f_resampled = np.interp(x_new_p, xp_p, p_f_vals)
-
-            power_list = []
-            for c_hw, f_hw in zip(coarse_codes_out, fine_codes_out):
-                c_idx = int(c_hw) if int(c_hw) < len(p_c_vals) else -1
-                f_idx = int(f_hw) if int(f_hw) < len(p_f_resampled) else -1
-                power_list.append(p_c_vals[c_idx] + p_f_resampled[f_idx])
-            
-            avg_power_selected = np.array(power_list) * 1e-6
-            valid_selected = np.arange(len(delay), dtype=int)
-            selected_coarse_codes = coarse_codes_out
-            selected_fine_codes = fine_codes_out
-        else:
-            power_csv_list = [Path(p) for p in args.power_csvs]
-            if len(power_csv_list) > 0:
-                avg_power_all = compute_average_power_per_period(
-                    power_csv_list=power_csv_list, n_periods=len(y),
-                    period_s=float(args.period_s), start_time_s=args.power_start_time
-                )
-                valid_selected = selected_input_indices[(selected_input_indices >= 0) & (selected_input_indices < len(avg_power_all))]
-                avg_power_selected = avg_power_all[valid_selected]
-                selected_coarse_codes = coarse_codes_out[: len(valid_selected)].astype(int)
-                selected_fine_codes = fine_codes_out[: len(valid_selected)].astype(int)
-
-                (selected_coarse_codes, selected_fine_codes, valid_selected, avg_power_selected) = filter_power_codes_for_plot(
-                    coarse_codes=selected_coarse_codes, fine_codes=selected_fine_codes,
-                    source_period_index=valid_selected.astype(int), avg_power_w=avg_power_selected,
-                )
-            else:
-                avg_power_selected = np.zeros(len(delay))
-                valid_selected = np.arange(len(delay))
-                selected_coarse_codes = coarse_codes_out
-                selected_fine_codes = fine_codes_out
-
-        linear_code = np.arange(len(avg_power_selected), dtype=int)
-        pd.DataFrame({
-            "linearized_code": linear_code,
-            "source_period_index": valid_selected.astype(int),
-            "coarse_code": selected_coarse_codes,
-            "fine_code": selected_fine_codes,
-            "avg_power_w": avg_power_selected,
-            "avg_power_uw": avg_power_selected * 1e6,
-        }).to_csv(avg_power_csv_path, index=False)
-
-        with plt.rc_context(SCIENCE_STYLE_OVERRIDES):
-            avg_power_plot = plot_selected_average_power(avg_power_selected, out_dir, P_static=args.static_power_uw * 1e-6)
-
-        print(f"Single evaluation complete. Peak |DNL|: {float(np.max(np.abs(dnl))):.4f}")
+        if both_sources:
+            comparison_dir = out_dir / "comparison"
+            comparison_dir.mkdir(parents=True, exist_ok=True)
+            plot_source_comparison(results, comparison_dir)
 if __name__ == "__main__":
     main()
 

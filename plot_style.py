@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from functools import wraps
 from pathlib import Path
 
@@ -7,10 +8,35 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 
 
+def _detect_working_latex() -> bool:
+    """Check that matplotlib's usetex pipeline actually works end to end.
+
+    `latex` can be on PATH and compile a plain document while still failing
+    matplotlib's own preamble, e.g. when the `cm-super`/`type1cm` packages it
+    requires are missing (common with a bare BasicTeX/conda install). So the
+    only reliable check is to run matplotlib's real TeX pipeline, not a
+    hand-written probe document.
+    """
+    if shutil.which("latex") is None:
+        return False
+    try:
+        from matplotlib.texmanager import TexManager
+
+        with plt.rc_context({"text.usetex": True}):
+            TexManager().get_text_width_height_descent("test", 10, None)
+        return True
+    except Exception:
+        return False
+
+
 HAS_SCIENCEPLOTS = False
+HAS_LATEX = _detect_working_latex()
+print(f"Detected working LaTeX: {HAS_LATEX}")
 SCIENCE_STYLE = ["science", "std-colors"]
 SCIENCE_STYLE_OVERRIDES = {
-    "text.usetex": True,
+    # Falls back to matplotlib's built-in mathtext when no LaTeX install is found,
+    # so labels like $\mathrm{...}$ still render instead of crashing plt.tight_layout().
+    "text.usetex": HAS_LATEX,
     "figure.figsize": (3.3, 2.5),
     "font.size": 15,
     "axes.labelsize": 15,

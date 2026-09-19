@@ -1,4 +1,0 @@
-delay (modelFiles=toplevel.scs:top_ff) X,delay (modelFiles=toplevel.scs:top_ff) Y,delay (modelFiles=toplevel.scs:top_fs) X,delay (modelFiles=toplevel.scs:top_fs) Y,delay (modelFiles=toplevel.scs:top_tt) X,delay (modelFiles=toplevel.scs:top_tt) Y,delay (modelFiles=toplevel.scs:top_sf) X,delay (modelFiles=toplevel.scs:top_sf) Y,delay (modelFiles=toplevel.scs:top_ss) X,delay (modelFiles=toplevel.scs:top_ss) Y
--55,6.473487080379619e-09,-55,5.756115970826064e-09,-55,5.233778910004025e-09,-55,4.603338025481683e-09,-55,4.357367515469555e-09
-0,6.733903919884264e-09,0,5.902981208033721e-09,0,5.591946149781575e-09,0,4.937857037124165e-09,0,4.545116344495078e-09
-80,7.014032197459513e-09,80,6.092093797690356e-09,80,6.062871705690986e-09,80,5.397675432487008e-09,80,4.903282167796785e-09

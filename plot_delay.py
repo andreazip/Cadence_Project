@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
 import re
+import inspect
 import numpy as np
 import argparse
 from pathlib import Path
@@ -18,6 +19,12 @@ from plot_style import HAS_SCIENCEPLOTS, SCIENCE_STYLE, apply_science_style, _mu
 #
 # List plot types:
 #   python plot_delay.py --list-types
+#
+# List all plotting functions:
+#   python plot_delay.py --list-functions
+#
+# Show the inputs (parameters) of a specific function:
+#   python plot_delay.py --describe plot_phase_noise_comparison
 #
 # Auto-detect best plot for a CSV:
 #   python plot_delay.py --file cs_delay_code_4bit.csv --type auto
@@ -830,6 +837,7 @@ class CadencePlotter:
         """
         df_a = None
         df_b = None
+        print(f"Plotting average power by code with parameters: start_time={start_time}, window_size={window_size}, num_codes={num_codes}, remove_code={remove_code}, P_static={P_static}")
         
         # 1. Load File A and File B dataframes explicitly
         if file_a:
@@ -2380,7 +2388,45 @@ class CadencePlotter:
             "pvt_envelopes": "PVT DNL/INL envelope",
             "pvt_summary": "PVT summary plots",
         }
-    
+
+    def list_functions(self):
+        """Return the names of all public, callable plotting/helper methods."""
+        return sorted(
+            name for name, _ in inspect.getmembers(self, predicate=inspect.ismethod)
+            if not name.startswith("_")
+        )
+
+    def describe_function(self, name):
+        """Print the parameters (name, default value) and docstring of a method by name."""
+        target = getattr(self, name, None)
+        if target is None or not callable(target):
+            print(f"Unknown function: '{name}'")
+            print("Use --list-functions to see available function names.")
+            return
+
+        sig = inspect.signature(target)
+        print(f"\n{name}{sig}")
+
+        params = [p for p in sig.parameters.values() if p.name != "self"]
+        if params:
+            print("\nInputs:")
+            for p in params:
+                if p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+                    label = f"*{p.name}" if p.kind == inspect.Parameter.VAR_POSITIONAL else f"**{p.name}"
+                    print(f"  - {label}")
+                elif p.default is inspect.Parameter.empty:
+                    print(f"  - {p.name} (required)")
+                else:
+                    print(f"  - {p.name} (default={p.default!r})")
+        else:
+            print("\nInputs: none")
+
+        doc = inspect.getdoc(target)
+        if doc:
+            print(f"\n{doc}\n")
+        else:
+            print()
+
     def plot_linearity_envelope(self, file_a=None, file_b=None, num_codes=256, **kwargs):
         """
         Plots the DNL and INL performance bounds over all corners using an envelope/spread plot.
@@ -3498,10 +3544,12 @@ def build_cli_parser():
     parser.add_argument("command", nargs="?", choices=["jhelp"],
                         help="Quick help command (run: python plot_delay.py jhelp)")
     parser.add_argument("--base-dir", default="results_cadence", help="Directory containing CSV files")
-    parser.add_argument("--plot-dir", default="C:\\Users\\zipar\\OneDrive - Delft University of Technology\\Second Year\\MEP\\plots", help="Directory where plots are saved")
+    parser.add_argument("--plot-dir", default="/Users/andreaziparo/Library/CloudStorage/OneDrive-DelftUniversityofTechnology/Results_cadence", help="Directory where plots are saved")
     parser.add_argument("--file", help="CSV filename to plot")
     parser.add_argument("--type", default="auto", help="Plot type (use --list-types to see options)")
     parser.add_argument("--list-types", action="store_true", help="List supported plot types and exit")
+    parser.add_argument("--list-functions", action="store_true", help="List all plotting/helper function names and exit")
+    parser.add_argument("--describe", metavar="FUNCTION", help="Show the inputs (parameters) of a function and exit")
     parser.add_argument("--task", action="append", help="Run a predefined task name (can repeat)")
     parser.add_argument("--all-tasks", action="store_true", help="Run all predefined tasks")
     parser.add_argument("--coarse-fine", action="store_true", help="Run coarse-fine processing flow")
@@ -3544,6 +3592,8 @@ def print_jhelp(plotter):
     print("  --base-dir results_cadence   Where CSV files are")
     print("  --plot-dir plots             Where output images go")
     print("  --type <plot_type>           Which plot style to generate")
+    print("  --list-functions             List every plotting/helper function name")
+    print("  --describe <function_name>   Show the inputs of a specific function")
     print("\n3) Available plot types")
     for name, desc in plotter.available_plot_types().items():
         print(f"  - {name:22s} {desc}")
@@ -3564,6 +3614,16 @@ def main():
         print("Available plot types:")
         for name, desc in plotter.available_plot_types().items():
             print(f"  - {name:22s} {desc}")
+        return
+
+    if args.list_functions:
+        print("Available functions (use --describe <name> to see its inputs):")
+        for name in plotter.list_functions():
+            print(f"  - {name}")
+        return
+
+    if args.describe:
+        plotter.describe_function(args.describe)
         return
 
     if args.all_tasks or args.task:
