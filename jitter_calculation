@@ -1,0 +1,318 @@
+"""
+Find minimum C_bias for sigma_t < target jitter. The reference-noise term is
+integrated as a hard cutoff from 0 to x_hi, where x_hi is set directly by CB
+(via f_pole) rather than by a fixed external band or a smooth pole weighting.
+
+Formula from notes:
+    sigma²_t = (4kTγ/IN·Vov) * [1 + (2/π)N·∫_{x_lo}^{x_hi} sinc²(x) dx] * td
+
+    x = pi·f·td,   x_lo = 0·π·td,   x_hi = f_pole·π·td
+    f_pole = Iref/ (π·CB·Vov),   Iref = IN/N
+
+Two terms:
+    Term 1 (slave only):  sqrt(4kTγ/IN/Vov · td)    — floor, CB-independent
+    Term 2 (ref noise):   filtered by CB via x_pole   — goes to 0 as CB→∞
+"""
+
+import numpy as np
+from scipy import optimize
+from scipy.special import sici
+import matplotlib.pyplot as plt
+
+# ── Constants ──────────────────────────────────
+k     = 1.38e-23
+T     = 100
+gamma = 1
+
+# ── Carrier period (for phase-noise conversion) ─
+# Named separately from T (temperature) to avoid clobbering it.
+T_PERIOD = 20e-9   # [s]
+
+# ── Fixed parameters ───────────────────────────
+IN    = 100e-6     # Slave current [A]
+Vov   = 0.7     # Overdrive [V]
+N     = 1         # Mirror ratio
+td    = 5e-9    # Delay window [s]
+Iref  = IN / N     # Master current
+target_ps = 1  # Target jitter [ps]
+target_s  = target_ps * 1e-12
+
+# ── Flicker (1/f) noise ─────────────────────────
+# sigma^2_t,flicker = td^2/IN^2 * [ N * int_{f_min}^{f_pole(CB)} S_id(f) sinc^2(pi f td) df
+#                                       + int_{f_min}^{f_max}        S_id(f) sinc^2(pi f td) df ]
+# with S_id(f) = KF*gm^2/(Cox*W*L*f) [A^2/Hz], gm = 2*IN/Vov (same current for both terms).
+# f_min>0 is required: 1/f noise integrated down to f=0 diverges (log singularity).
+FLICKER   = True    # Set False to disable the flicker contribution entirely.
+F_MIN_HZ  = 10.0    # Lower integration cutoff [Hz]
+F_MAX_HZ  = 25e6    # Upper bound for the slave's own (unfiltered) flicker term [Hz]
+
+# PLACEHOLDERS — rough 40nm estimates, not PDK data. Replace with real model-card values.
+L   = 500e-9        # Channel length [m]
+Cox = 20e-15 / 1e-12  # Gate-oxide cap density [F/m^2]  (~20 fF/um^2)
+k_prime_n = 300e-6   # mu_n*Cox process transconductance param [A/V^2], used only to size W
+W   = 2 * IN * L / (k_prime_n * Vov**2)  # Derived from ID = 0.5*k'n*(W/L)*Vov^2, not guessed directly
+KF  = 1e-24          # Flicker noise coefficient [V^2*F], literature mid-range for NMOS
+
+if FLICKER:
+    print("  *** FLICKER NOISE ENABLED — using PLACEHOLDER 40nm estimates for KF, Cox, W, L ***")
+    print(f"      L={L*1e9:.0f} nm, W={W*1e9:.0f} nm (derived), Cox={Cox*1e3:.1f} fF/um^2, KF={KF:.1e} V^2*F")
+    print("      Replace these with real PDK/model-card values before trusting the result.\n")
+
+# ── Prefactor ──────────────────────────────────
+prefactor = 4 * k * T * gamma / (IN * Vov)
+
+# ── Integral ───────────────────────────────────
+def filtered_integral(CB):
+    """∫_0^{x_hi} sinc²(x) dx,  x = π·f·td,  x_hi = f_pole·π·td,  f_pole = Iref/(π·CB·Vov).
+
+    Uses the closed form Si(2a) - sin(a)^2/a instead of numerical quadrature:
+    for small CB, x_hi blows up to millions of sinc oscillation periods, which
+    scipy.integrate.quad with a bounded subdivision limit cannot resolve
+    accurately — that inaccuracy was making the plotted "ceiling" (CB->0) come
+    out lower than legitimately-computed sweep points, so the total curve
+    appeared to exceed it. The closed form has no such resolution limit.
+    """
+    f_pole = Iref / (np.pi * CB * Vov)
+    x_hi = f_pole * np.pi * td
+    if x_hi == 0.0:
+        return 0.0
+    Si_2a, _ = sici(2 * x_hi)
+    return Si_2a - (np.sin(x_hi)**2) / x_hi
+
+def _sinc2_over_u_antiderivative(u):
+    """Antiderivative of sinc²(u)/u = sin²(u)/u³, via integration by parts:
+    ∫ sin²(u)/u³ du = -sin²(u)/(2u²) - sin(2u)/(2u) + Ci(2u) + C
+    (Ci(x)→γ+ln(x) as x→0, so this diverges at u=0 — expected 1/f log behavior.)
+    """
+    _, Ci_2u = sici(2 * u)
+    return -(np.sin(u)**2) / (2*u**2) - np.sin(2*u) / (2*u) + Ci_2u
+
+def flicker_band_integral(f_lo, f_hi):
+    """∫_{f_lo}^{f_hi} sinc²(π f td)/f df,  f_lo must be > 0 (1/f divergence at f=0)."""
+    u_lo = np.pi * f_lo * td
+    u_hi = np.pi * f_hi * td
+    return _sinc2_over_u_antiderivative(u_hi) - _sinc2_over_u_antiderivative(u_lo)
+
+def flicker_components_s2(CB):
+    """(ref_s2, slave_s2): flicker contributions to sigma_t^2 [s^2], kept separate.
+
+    ref_s2   — reference flicker noise, scaled by N, filtered by CB via f_pole (vanishes as CB->inf).
+    slave_s2 — slave's own flicker noise, CB-independent (same role as the thermal floor term).
+    Both zero if FLICKER is disabled.
+    """
+    if not FLICKER:
+        return 0.0, 0.0
+    gm = 2 * IN / Vov
+    S_coeff = KF * gm**2 / (Cox * W * L)  # S_id(f) = S_coeff / f  [A^2/Hz]
+    f_pole = Iref / (np.pi * CB * Vov)
+    f_pole_eff = max(f_pole, F_MIN_HZ)  # large CB -> f_pole < F_MIN_HZ -> empty range, not negative
+    G_ref   = flicker_band_integral(F_MIN_HZ, f_pole_eff)  # reference term, filtered by CB
+    G_slave = flicker_band_integral(F_MIN_HZ, F_MAX_HZ)    # slave's own, CB-independent
+    scale = (td**2 / IN**2) * S_coeff
+    return scale * N * G_ref, scale * G_slave
+
+def flicker_sigma2_s2(CB):
+    """Total flicker contribution to sigma_t^2 [s^2] (sum of both components)."""
+    ref_s2, slave_s2 = flicker_components_s2(CB)
+    return ref_s2 + slave_s2
+
+# ── Phase noise ─────────────────────────────────
+def thermal_psd():
+    """White thermal drain-current noise PSD S_id = 4kTgamma*gm [A^2/Hz], gm=2*IN/Vov."""
+    gm = 2 * IN / Vov
+    return 4 * k * T * gamma * gm
+
+def flicker_psd(f):
+    """Flicker drain-current noise PSD S_id(f) = KF*gm^2/(Cox*W*L*f) [A^2/Hz]."""
+    gm = 2 * IN / Vov
+    return KF * gm**2 / (Cox * W * L * f)
+
+def phase_noise_dbc_hz(f, CB):
+    """Single-sideband phase noise L(f) [dBc/Hz] at offset frequency f, for a given CB.
+
+    St(f) = (td^2/IN^2) * sinc^2(pi f td) *
+            [ N*(S_thermal+S_flicker(f))*1{f<=f_pole(CB)}  +  (S_thermal+S_flicker(f)) ]   [s^2/Hz]
+    Sphi(f) = St(f) * (2*pi/T_PERIOD)^2    (standard jitter-PSD -> phase-noise-PSD conversion)
+    L(f) = Sphi(f) / 2                      (single-sideband convention)
+    """
+    f = np.asarray(f, dtype=float)
+    f_pole = Iref / (np.pi * CB * Vov)
+    S_total = thermal_psd() + (flicker_psd(f) if FLICKER else 0.0)
+    ref_gate = (f <= f_pole).astype(float)
+    x = np.pi * f * td
+    sinc2 = (np.sin(x) / x)**2
+    St = (td**2 / IN**2) * sinc2 * (N * S_total * ref_gate + S_total)
+    Sphi = St * (2 * np.pi / T_PERIOD)**2
+    L = Sphi / 2.0
+    return 10 * np.log10(L)
+
+def sigma_ps(CB):
+    I = filtered_integral(CB)
+    s2 = prefactor * (1.0 + (2/np.pi) * N * I) * td
+    s2 += flicker_sigma2_s2(CB)
+    return np.sqrt(s2) * 1e12
+
+# ── Floor and ceiling in ps ────────────────────
+# Both computed via sigma_ps itself at an extreme CB rather than hand-derived
+# constants — that's exactly the kind of formula that broke before when the
+# model changed (see the pi/2-vs-0.5 bug). With flicker enabled, the floor is
+# NOT purely thermal: the slave's own flicker term (G_slave) is CB-independent,
+# so it survives even as CB->infinity.
+# Floor   (CB→∞): f_pole→0, thermal ref term and flicker ref term vanish.
+# Ceiling (CB→0): f_pole→∞, both ref terms reach their full-band value.
+sigma_floor_ps    = sigma_ps(1.0)
+sigma_nofilter_ps = sigma_ps(1e-20)
+
+# ── Print summary ──────────────────────────────
+print("=" * 58)
+print("  DTC JITTER — Find minimum C_bias")
+print("=" * 58)
+print(f"  IN       = {IN*1e6:.1f} uA")
+print(f"  Iref     = {Iref*1e6:.1f} uA  (= IN/N)")
+print(f"  Vov      = {Vov*1e3:.0f} mV")
+print(f"  N        = {N}")
+print(f"  td       = {td*1e12:.0f} ps")
+print(f"  Target   = {target_ps:.0f} ps  ({target_s:.2e} s)")
+print(f"  Flicker  = {'ON' if FLICKER else 'OFF'}")
+print("-" * 58)
+print(f"  Floor   (CB→∞, slave thermal + slave flicker): {sigma_floor_ps:.2f} ps")
+print(f"  Ceiling (CB→0, no filter):                     {sigma_nofilter_ps:.2f} ps")
+
+if sigma_floor_ps >= target_ps:
+    print(f"\n  *** IMPOSSIBLE: floor {sigma_floor_ps:.1f} ps > target {target_ps:.0f} ps ***")
+    print("  → Must increase IN or Vov to reduce slave noise.")
+    exit()
+if sigma_nofilter_ps <= target_ps:
+    print(f"\n  *** Already below target even without CB ***")
+    print("  → CB not needed.")
+    exit()
+
+print(f"\n  → Solution exists. Solving for CB_min ...")
+
+# ── Sweep ──────────────────────────────────────
+CB_sweep = np.logspace(-15, -6, 300)
+j_sweep  = np.array([sigma_ps(cb) for cb in CB_sweep])
+
+# ── Root find ──────────────────────────────────
+idx = np.where(np.diff(np.sign(j_sweep - target_ps)))[0]
+if len(idx) == 0:
+    print(f"\n  *** No CB in the swept range [{CB_sweep[0]*1e15:.1f} fF, {CB_sweep[-1]*1e15:.1f} fF] "
+          f"reaches {target_ps:.1f} ps ***")
+    print(f"      Closest in range: {j_sweep.min():.3f} ps at CB={CB_sweep[np.argmin(j_sweep)]*1e15:.1f} fF.")
+    print(f"      (The true floor {sigma_floor_ps:.2f} ps is only reached as CB->infinity; it may take an")
+    print(f"       impractically large CB — well beyond on-chip range — to approach the target. Try")
+    print(f"       widening CB_sweep's upper bound to check, or revisit N/Vov/flicker parameters.")
+    exit()
+CB_lo, CB_hi = CB_sweep[idx[0]], CB_sweep[idx[0]+1]
+CB_min = optimize.brentq(lambda cb: sigma_ps(cb) - target_ps,
+                         CB_lo, CB_hi, xtol=1e-22)
+j_min_ps = sigma_ps(CB_min)
+
+f_pole_min = Iref / (np.pi * CB_min * Vov)
+x_hi_min   = f_pole_min * np.pi * td
+
+# breakdown
+I_min = filtered_integral(CB_min)
+t1_ps = np.sqrt(prefactor * 1.0               * td) * 1e12
+t2_ps = np.sqrt(prefactor * (2/np.pi)*N*I_min * td) * 1e12
+flicker_ref_s2_min, flicker_slave_s2_min = flicker_components_s2(CB_min)
+t3a_ps = np.sqrt(flicker_ref_s2_min) * 1e12    # flicker, reference (CB-filtered)
+t3b_ps = np.sqrt(flicker_slave_s2_min) * 1e12  # flicker, slave (CB-independent)
+
+print(f"\n  ✓ RESULT:")
+print(f"    CB_min  = {CB_min*1e15:.2f} fF")
+print(f"    Jitter  = {j_min_ps:.3f} ps")
+print(f"    x_hi    = {x_hi_min:.4f}  (integration cutoff; < 1 means strong filtering within td)")
+print(f"    f_pole  = {f_pole_min/1e9:.4f} GHz")
+print(f"    1/td    = {1/td/1e9:.3f} GHz")
+print(f"\n  Noise breakdown:")
+print(f"    Slave thermal (term 1, floor):     {t1_ps:.3f} ps")
+print(f"    Ref   thermal (term 2, CB):        {t2_ps:.3f} ps")
+print(f"    Ref   flicker (term 3a, CB):       {t3a_ps:.3f} ps" + ("" if FLICKER else "  (disabled)"))
+print(f"    Slave flicker (term 3b, floor):    {t3b_ps:.3f} ps" + ("" if FLICKER else "  (disabled)"))
+print(f"    Total (RSS):                       {np.sqrt(t1_ps**2+t2_ps**2+t3a_ps**2+t3b_ps**2):.3f} ps")
+print("=" * 58)
+
+# ── Breakdown arrays ───────────────────────────
+term1_arr = np.full(len(CB_sweep), t1_ps)
+term2_arr = np.array([
+    np.sqrt(prefactor*(2/np.pi)*N*filtered_integral(cb)*td)*1e12
+    for cb in CB_sweep])
+_flicker_components = [flicker_components_s2(cb) for cb in CB_sweep]
+term3a_arr = np.array([np.sqrt(c[0])*1e12 for c in _flicker_components])  # ref flicker, CB-filtered
+term3b_arr = np.full(len(CB_sweep), np.sqrt(_flicker_components[0][1])*1e12)  # slave flicker, CB-independent
+total_arr = np.sqrt(term1_arr**2 + term2_arr**2 + term3a_arr**2 + term3b_arr**2)
+
+# ── Plot ───────────────────────────────────────
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+fig.suptitle(
+    f"Minimum $C_B$ for $\\sigma_t < {target_ps:.0f}$ ps  |  "
+    f"$I_N = {IN*1e6:.0f}\\,\\mu A$,  $V_{{ov}} = {Vov*1e3:.0f}$ mV,  "
+    f"$N = {N}$,  $t_d = {td*1e12:.0f}$ ps"
+    + ("  |  flicker ON" if FLICKER else ""),
+    fontsize=11, fontweight='bold')
+
+# Left: total jitter
+ax1 = axes[0]
+ax1.semilogx(CB_sweep*1e15, j_sweep, 'b', lw=2, label='Total $\\sigma_t$')
+ax1.axhline(target_ps,          color='r',      ls='--', lw=1.5,
+            label=f'Target: {target_ps:.0f} ps')
+ax1.axhline(sigma_floor_ps,     color='g',      ls=':',  lw=1.5,
+            label=f'Floor (slave): {sigma_floor_ps:.1f} ps')
+ax1.axhline(sigma_nofilter_ps,  color='m',      ls=':',  lw=1.5,
+            label=f'Ceiling (no $C_B$): {sigma_nofilter_ps:.1f} ps')
+ax1.axvline(CB_min*1e15,        color='orange', ls='-.', lw=2,
+            label=f'$C_{{B,min}} = {CB_min*1e15:.1f}$ fF')
+ax1.plot(CB_min*1e15, j_min_ps, 'ro', ms=9, zorder=5)
+ax1.set_xlabel('$C_B$ [fF]', fontsize=11)
+ax1.set_ylabel('RMS Jitter [ps]', fontsize=11)
+ax1.set_title('Total Jitter vs $C_B$')
+ax1.legend(fontsize=9)
+ax1.grid(True, alpha=0.3)
+ax1.set_ylim(sigma_floor_ps*0.9, sigma_nofilter_ps*1.15)
+
+# Right: breakdown
+ax2 = axes[1]
+ax2.semilogx(CB_sweep*1e15, total_arr,  'b',   lw=2,   label='Total')
+ax2.semilogx(CB_sweep*1e15, term1_arr,  'g--', lw=1.5, label='Slave thermal (Term 1, floor)')
+ax2.semilogx(CB_sweep*1e15, term2_arr,  'r--', lw=1.5, label='Ref thermal (Term 2, filtered)')
+if FLICKER:
+    ax2.semilogx(CB_sweep*1e15, term3a_arr, 'r:', lw=1.5, label='Ref flicker (Term 3a, filtered)')
+    ax2.semilogx(CB_sweep*1e15, term3b_arr, 'g:', lw=1.5, label='Slave flicker (Term 3b, floor)')
+ax2.axhline(target_ps, color='k', ls=':', lw=1.5,
+            label=f'{target_ps:.0f} ps target')
+ax2.axvline(CB_min*1e15, color='orange', ls='-.', lw=2,
+            label=f'$C_{{B,min}} = {CB_min*1e15:.1f}$ fF')
+ax2.plot(CB_min*1e15, j_min_ps, 'ro', ms=9, zorder=5)
+ax2.set_xlabel('$C_B$ [fF]', fontsize=11)
+ax2.set_ylabel('RMS Jitter [ps]', fontsize=11)
+ax2.set_title('Noise Contribution Breakdown')
+ax2.legend(fontsize=9)
+ax2.grid(True, alpha=0.3)
+ax2.set_ylim(sigma_floor_ps*0.9, sigma_nofilter_ps*1.15)
+
+plt.tight_layout()
+plt.savefig('find_cbias.png', dpi=150, bbox_inches='tight')
+plt.close()
+print("\n  Plot saved → find_cbias.png")
+
+# ── Phase noise plot (at CB_min) ────────────────
+f_plot = np.logspace(np.log10(F_MIN_HZ), np.log10(1/2/T_PERIOD), 1000)
+L_dbc = phase_noise_dbc_hz(f_plot, CB_min)
+
+fig2, ax3 = plt.subplots(figsize=(8, 5))
+ax3.semilogx(f_plot/1e6, L_dbc, 'b', lw=2)
+ax3.axvline(f_pole_min/1e6, color='orange', ls='-.', lw=1.5,
+            label=f'$f_{{pole}} = {f_pole_min/1e6:.2f}$ MHz')
+ax3.axvline(1/T_PERIOD/1e6, color='purple', ls=':', lw=1.5,
+            label=f'$1/(2T) = {1/2/T_PERIOD/1e6:.0f}$ MHz')
+ax3.set_xlabel('Offset frequency [MHz]', fontsize=11)
+ax3.set_ylabel('Phase noise $\\mathcal{L}(f)$ [dBc/Hz]', fontsize=11)
+ax3.set_title(f'Phase Noise at $C_{{B,min}} = {CB_min*1e12:.1f}$ pF' + (' (flicker ON)' if FLICKER else ''))
+ax3.legend(fontsize=9)
+ax3.grid(True, which='both', alpha=0.3)
+
+plt.tight_layout()
+plt.savefig('phase_noise.png', dpi=150, bbox_inches='tight')
+plt.close()
+print("  Plot saved → phase_noise.png")
