@@ -54,6 +54,13 @@ class CadencePlotter:
         fig.canvas.draw()  # Ensure figure is fully rendered
         fig.savefig(save_path, dpi=dpi, bbox_inches=bbox_inches, pad_inches=0.05)
         print(f"  Saved: {save_path.name}")
+        if Path(save_path).suffix.lower() == ".pdf":
+            # PNG copy in a png/ subfolder, for quick viewing and slides.
+            png_dir = Path(save_path).parent / "png"
+            png_dir.mkdir(parents=True, exist_ok=True)
+            png_path = png_dir / f"{Path(save_path).stem}.png"
+            fig.savefig(png_path, dpi=dpi, bbox_inches=bbox_inches, pad_inches=0.05)
+            print(f"  Saved: png/{png_path.name}")
         plt.close(fig)  # Close specific figure
     
     def _create_figure(self, nrows=1, ncols=1, sharex=False, sharey=False):
@@ -279,11 +286,19 @@ class CadencePlotter:
     
     
     def _get_save_path(self, filename, signal_name, plot_type):
-        """Routes files to 'variable_slope' or 'constant_slope' subfolders."""
-        subfolder = "other"
+        """Routes files to subfolders of plot_dir.
+
+        Files from a numbered results folder (e.g. results/04_DAC_pulse/power.csv) go to the
+        plot subfolder with the same name; otherwise the filename prefix decides
+        ('vs', 'cs', ...); anything else is saved directly in plot_dir.
+        """
+        subfolder = None
         fname_lower = Path(filename).name.lower()
-        
-        if fname_lower.startswith("vs"):
+        parent_name = Path(filename).parent.name
+
+        if re.match(r"^\d{2}_", parent_name):
+            subfolder = parent_name
+        elif fname_lower.startswith("vs"):
             subfolder = "variable_slope"
         elif fname_lower.startswith("cs"):
             subfolder = "constant_slope"
@@ -293,8 +308,8 @@ class CadencePlotter:
             subfolder = "Phase_interpolator"
         
         # Create the subfolder path
-        target_dir = self.plot_dir / subfolder
-        target_dir.mkdir(exist_ok=True)
+        target_dir = self.plot_dir / subfolder if subfolder else self.plot_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
         
         # Sanitize parts to build safe filename
         safe_sig = self._sanitize(signal_name)
